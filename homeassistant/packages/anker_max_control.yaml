@@ -1,0 +1,219 @@
+# ============================================================
+# Anker MAX AC – Optimalsteuerung neben SolarEdge + LG Chem
+# Reine Home-Assistant-Lösung (Helper + Template-Sensoren +
+# Automation) - ohne Node-RED.
+#
+# Installation:
+#   1. In configuration.yaml sicherstellen, dass Packages aktiv sind:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   2. Diese Datei nach <config>/packages/anker_max_control.yaml legen.
+#   3. Unten im Abschnitt "ANPASSEN" die Entity-IDs an die eigene
+#      Anlage anpassen (SolarEdge-Zähler, LG-Chem-SOC, Anker-Entities).
+#   4. Home Assistant neu starten (Packages werden nicht durch
+#      "YAML neu laden" übernommen, nur durch einen Neustart).
+#
+# Siehe README.md für Details zur Logik, Parametern und Fehlersuche.
+# ============================================================
+
+input_datetime:
+  anker_control_last_command:
+    name: "Anker Control: Letzter Befehl"
+    has_date: true
+    has_time: true
+
+input_text:
+  anker_control_last_action:
+    name: "Anker Control: Letzte Aktion"
+    initial: "idle"
+
+input_number:
+  anker_control_last_charge_target:
+    name: "Anker Control: Zuletzt gesendete Ladeleistung"
+    min: 0
+    max: 10000
+    step: 1
+    unit_of_measurement: "W"
+  anker_control_last_discharge_target:
+    name: "Anker Control: Zuletzt gesendete Entladeleistung"
+    min: 0
+    max: 10000
+    step: 1
+    unit_of_measurement: "W"
+
+template:
+  - trigger:
+      - trigger: time_pattern
+        seconds: "/30"
+    variables:
+      # ---------- ANPASSEN: Entity-IDs an eigene Installation ----------
+      grid_power_entity: sensor.solaredge_m1_ac_power
+      lg_soc_entity: sensor.solaredge_battery_state_of_energy
+      anker_soc_entity: sensor.anker_solarbank_state_of_charge
+      grid_power_sign: 1   # auf -1 stellen, falls Vorzeichen umgekehrt ist (+ = Bezug / - = Einspeisung erwartet)
+
+      # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
+      min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
+      max_soc: 95                 # % - nie über diesen Wert laden (Zellschutz)
+      lg_full_soc: 95             # % - ab hier gilt LG Chem als "voll genug"
+      lg_empty_soc: 10            # % - ab hier gilt LG Chem als "leer"
+      deadband_w: 60              # W - Totband gegen Flattern
+      max_charge_power: 1200      # W - siehe Datenblatt Anker MAX AC
+      max_discharge_power: 1800   # W - siehe Datenblatt Anker MAX AC
+
+      # ---------- Berechnung (nicht anpassen) ----------
+      grid_power_raw: "{{ states(grid_power_entity) | float(0) }}"
+      grid_power: "{{ grid_power_raw * grid_power_sign }}"
+      lg_soc: "{{ states(lg_soc_entity) | float(-1) }}"
+      anker_soc: "{{ states(anker_soc_entity) | float(-1) }}"
+      sensors_ok: "{{ states(grid_power_entity) not in ['unknown','unavailable',none] and states(lg_soc_entity) not in ['unknown','unavailable',none] and states(anker_soc_entity) not in ['unknown','unavailable',none] }}"
+      surplus: "{{ -grid_power }}"
+      deficit: "{{ grid_power }}"
+      can_charge: "{{ anker_soc < max_soc }}"
+      can_discharge: "{{ anker_soc > min_soc }}"
+      action: "{{ 'unavailable' if not sensors_ok else ('charge' if (surplus > deadband_w and lg_soc >= lg_full_soc and can_charge) else ('discharge' if (deficit > deadband_w and lg_soc <= lg_empty_soc and can_discharge) else 'idle')) }}"
+      charge_target: "{{ ([surplus, max_charge_power] | min) | round(0) if action == 'charge' else 0 }}"
+      discharge_target: "{{ ([deficit, max_discharge_power] | min) | round(0) if action == 'discharge' else 0 }}"
+    sensor:
+      - name: "Anker Control Aktion"
+        unique_id: anker_control_aktion
+        state: "{{ action }}"
+        icon: "{{ 'mdi:battery-charging' if action == 'charge' else ('mdi:battery-arrow-down' if action == 'discharge' else ('mdi:alert-circle' if action == 'unavailable' else 'mdi:battery-heart-variant')) }}"
+        attributes:
+          grid_power_w: "{{ grid_power | round(0) }}"
+          lg_soc: "{{ lg_soc }}"
+          anker_soc: "{{ anker_soc }}"
+          can_charge: "{{ can_charge }}"
+          can_discharge: "{{ can_discharge }}"
+      - name: "Anker Control Ladeleistung Soll"
+        unique_id: anker_control_ladeleistung_soll
+        unit_of_measurement: "W"
+        state_class: measurement
+        state: "{{ charge_target }}"
+      - name: "Anker Control Entladeleistung Soll"
+        unique_id: anker_control_entladeleistung_soll
+        unit_of_measurement: "W"
+        state_class: measurement
+        state: "{{ discharge_target }}"
+
+automation:
+  - id: anker_control_apply
+    alias: "Anker Control: Entscheidung anwenden"
+    description: >-
+      Sendet Lade-/Entlade-/Modus-Befehle an den Anker MAX AC, sobald sich
+      die berechnete Zielaktion relevant ändert (mit Hysterese, Mindestabstand
+      zwischen Cloud-Befehlen und Sicherheits-Override bei SOC-Grenzen).
+    trigger:
+      - trigger: time_pattern
+        seconds: "/30"
+    condition: []
+    mode: single
+    action:
+      - variables:
+          action: "{{ states('sensor.anker_control_aktion') }}"
+          anker_soc_now: "{{ state_attr('sensor.anker_control_aktion', 'anker_soc') | float(-1) }}"
+          charge_target: "{{ states('sensor.anker_control_ladeleistung_soll') | float(0) }}"
+          discharge_target: "{{ states('sensor.anker_control_entladeleistung_soll') | float(0) }}"
+          prev_action: "{{ states('input_text.anker_control_last_action') }}"
+          prev_charge: "{{ states('input_number.anker_control_last_charge_target') | float(0) }}"
+          prev_discharge: "{{ states('input_number.anker_control_last_discharge_target') | float(0) }}"
+          last_cmd_ts: "{{ states('input_datetime.anker_control_last_command') }}"
+          seconds_since_last: "{{ now().timestamp() - (last_cmd_ts | as_timestamp(0)) }}"
+          action_changed: "{{ action != prev_action }}"
+          significant_change: "{{ (charge_target - prev_charge) | abs >= 50 or (discharge_target - prev_discharge) | abs >= 50 }}"
+          due_for_refresh: "{{ seconds_since_last >= 600 }}"
+          min_interval_ok: "{{ seconds_since_last >= 90 }}"
+          safety_override: "{{ (prev_action == 'discharge' and anker_soc_now <= 10) or (prev_action == 'charge' and anker_soc_now >= 95) }}"
+          should_send: "{{ action != 'unavailable' and (safety_override or ((action_changed or significant_change or due_for_refresh) and min_interval_ok)) }}"
+      - if:
+          - condition: template
+            value_template: "{{ action == 'unavailable' }}"
+        then:
+          - service: persistent_notification.create
+            data:
+              title: "Anker-Steuerung"
+              message: "Pflicht-Sensor(en) nicht verfügbar - keine Aktion ausgeführt."
+              notification_id: anker_control_error
+      - if:
+          - condition: template
+            value_template: "{{ should_send }}"
+        then:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ action == 'charge' }}"
+                sequence:
+                  # ---------- ANPASSEN: Entity-IDs/Services der Anker-Integration ----------
+                  - service: number.set_value
+                    target:
+                      entity_id: number.anker_solarbank_charge_power_limit
+                    data:
+                      value: "{{ charge_target }}"
+                  - service: number.set_value
+                    target:
+                      entity_id: number.anker_solarbank_output_power_preset
+                    data:
+                      value: 0
+                  - service: select.select_option
+                    target:
+                      entity_id: select.anker_solarbank_usage_mode
+                    data:
+                      option: "Manual"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ action == 'discharge' }}"
+                sequence:
+                  - service: number.set_value
+                    target:
+                      entity_id: number.anker_solarbank_output_power_preset
+                    data:
+                      value: "{{ discharge_target }}"
+                  - service: number.set_value
+                    target:
+                      entity_id: number.anker_solarbank_charge_power_limit
+                    data:
+                      value: 0
+                  - service: select.select_option
+                    target:
+                      entity_id: select.anker_solarbank_usage_mode
+                    data:
+                      option: "Manual"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ action == 'idle' }}"
+                sequence:
+                  - service: number.set_value
+                    target:
+                      entity_id: number.anker_solarbank_charge_power_limit
+                    data:
+                      value: 0
+                  - service: number.set_value
+                    target:
+                      entity_id: number.anker_solarbank_output_power_preset
+                    data:
+                      value: 0
+                  - service: select.select_option
+                    target:
+                      entity_id: select.anker_solarbank_usage_mode
+                    data:
+                      option: "Self Consumption"
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.anker_control_last_action
+            data:
+              value: "{{ action }}"
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.anker_control_last_charge_target
+            data:
+              value: "{{ charge_target }}"
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.anker_control_last_discharge_target
+            data:
+              value: "{{ discharge_target }}"
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.anker_control_last_command
+            data:
+              timestamp: "{{ now().timestamp() }}"
