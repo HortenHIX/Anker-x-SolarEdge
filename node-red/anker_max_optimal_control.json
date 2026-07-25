@@ -1,0 +1,298 @@
+[
+    {
+        "id": "tab_anker_control",
+        "type": "tab",
+        "label": "Anker MAX AC – Optimalsteuerung",
+        "disabled": false,
+        "info": "Steuert den Anker MAX AC Speicher optimal neben einer bestehenden SolarEdge-Anlage mit LG Chem Speicher.\n\nDa Anker, SolarEdge und LG Chem nicht direkt miteinander kommunizieren können, übernimmt dieser Flow die Koordination über Home Assistant:\n- SolarEdge/LG Chem werden NUR ausgelesen (Netzleistung, Speicher-SOC) und NICHT gesteuert - ihre eigene Eigenverbrauchsregelung hat immer Vorrang.\n- Der Anker-Speicher wird aktiv geladen/entladen, wenn die SolarEdge/LG-Chem-Regelung den PV-Überschuss bzw. Netzbezug nicht mehr abdecken kann (LG Chem voll bzw. leer).\n\nWICHTIG: Vor dem Deploy müssen die Entity-IDs im Funktionsknoten 'Optimale Steuerung berechnen' sowie die Ziel-Entities der drei 'Anker:'-Service-Call-Knoten an die eigene Installation angepasst werden. Details siehe README.md."
+    },
+    {
+        "id": "ha_server",
+        "type": "server",
+        "name": "Home Assistant",
+        "version": 5,
+        "addon": true,
+        "rejectUnauthorizedCerts": true,
+        "ha_boolean": "y|yes|true|on|home|open",
+        "connectionDelay": true,
+        "cacheJson": true,
+        "heartbeatInterval": 30
+    },
+    {
+        "id": "cmt_overview",
+        "type": "comment",
+        "z": "tab_anker_control",
+        "name": "⚠ Vor dem Deploy anpassen: Entity-IDs in \"Optimale Steuerung berechnen\" + in den 3 Anker-Service-Call-Knoten",
+        "info": "",
+        "x": 480,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "inj_poll",
+        "type": "inject",
+        "z": "tab_anker_control",
+        "name": "Alle 30s prüfen",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "30",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 10,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 160,
+        "y": 120,
+        "wires": [
+            [
+                "fn_decide"
+            ]
+        ]
+    },
+    {
+        "id": "inj_manual",
+        "type": "inject",
+        "z": "tab_anker_control",
+        "name": "Manuell auslösen (Test)",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 170,
+        "y": 170,
+        "wires": [
+            [
+                "fn_decide"
+            ]
+        ]
+    },
+    {
+        "id": "fn_decide",
+        "type": "function",
+        "z": "tab_anker_control",
+        "name": "Optimale Steuerung berechnen",
+        "func": "// ============================================================\n// Anker MAX AC – Optimale Einbindung neben SolarEdge + LG Chem\n// ------------------------------------------------------------\n// Der Anker-Speicher kann nicht mit SolarEdge/LG Chem kommunizieren\n// und regelt sich nicht automatisch auf PV-Ueberschuss ein. Dieser\n// Knoten liest deshalb den aktuellen Anlagenzustand aus dem lokalen\n// Home-Assistant-Zustandscache und entscheidet, ob der Anker gerade\n// laden, entladen oder nichts tun soll. SolarEdge/LG Chem werden\n// dabei NICHT gesteuert, nur ausgelesen - ihre eigene\n// Eigenverbrauchsregelung hat immer Vorrang.\n// ============================================================\n\n// ---------- 1) KONFIGURATION: Entity-IDs anpassen! ----------\nconst ENTITIES = {\n    gridPower: 'sensor.solaredge_m1_ac_power',          // W, + = Netzbezug, - = Einspeisung\n    gridPowerSign: 1,                                    // auf -1 stellen, falls Vorzeichen bei dir umgekehrt ist\n    lgSoc: 'sensor.solaredge_battery_state_of_energy',   // % Ladestand LG Chem (ueber SolarEdge/StorEdge)\n    ankerSoc: 'sensor.anker_solarbank_state_of_charge',  // % Ladestand Anker MAX AC\n};\n\n// ---------- 2) GRENZWERTE / VERHALTEN ------------------------\nconst LIMITS = {\n    ankerMinSoc: 10,                 // % - nie unter diesen Wert entladen (Zellschutz)\n    ankerMaxSoc: 95,                 // % - nie ueber diesen Wert laden (Zellschutz)\n    ankerMaxChargePower: 1200,       // W - siehe Datenblatt Anker MAX AC anpassen\n    ankerMaxDischargePower: 1800,    // W - siehe Datenblatt Anker MAX AC anpassen\n    lgFullSoc: 95,                   // % - ab hier gilt LG Chem als \"voll genug\"; Ueberschuss darf zum Anker\n    lgEmptySoc: 10,                  // % - ab hier gilt LG Chem als \"leer\"; Anker darf einspringen\n    deadbandW: 60,                   // W - kleinere Ueberschuesse/Defizite werden ignoriert (Anti-Flattern)\n    minCommandIntervalMs: 90 * 1000, // ms - Mindestabstand zwischen zwei Befehlen (Cloud-API schonen)\n    minPowerDeltaToResend: 50,       // W - Befehl nur wiederholen, wenn sich Zielwert deutlich aendert\n    forceResendMs: 10 * 60 * 1000,   // ms - Befehl trotzdem regelmaessig auffrischen (Absicherung)\n};\n\n// ---------- 3) HILFSFUNKTIONEN --------------------------------\nfunction getState(entityId) {\n    const ha = global.get('homeassistant');\n    const store = ha && ha.homeAssistant ? ha.homeAssistant.states : undefined;\n    const st = store ? store[entityId] : undefined;\n    if (!st || st.state === 'unavailable' || st.state === 'unknown') return undefined;\n    const num = Number(st.state);\n    return Number.isNaN(num) ? undefined : num;\n}\n\nfunction clamp(v, min, max) {\n    return Math.max(min, Math.min(max, v));\n}\n\n// ---------- 4) AKTUELLE WERTE LESEN ---------------------------\nconst raw = {\n    gridPower: getState(ENTITIES.gridPower),\n    lgSoc: getState(ENTITIES.lgSoc),\n    ankerSoc: getState(ENTITIES.ankerSoc),\n};\n\nif (raw.gridPower === undefined || raw.lgSoc === undefined || raw.ankerSoc === undefined) {\n    const errMsg = { payload: 'Anker-Steuerung: Pflicht-Sensor(en) nicht verfuegbar - keine Aktion ausgefuehrt.', details: raw };\n    node.warn(errMsg.payload);\n    node.status({ fill: 'red', shape: 'ring', text: 'Sensor fehlt' });\n    return [null, null, null, null, errMsg];\n}\n\nconst gridPower = raw.gridPower * ENTITIES.gridPowerSign; // + Bezug / - Einspeisung\nconst surplus = -gridPower; // > 0 => PV-Ueberschuss vorhanden\nconst deficit = gridPower;  // > 0 => Netzbezug\n\n// ---------- 5) ENTSCHEIDUNG ------------------------------------\nlet action = 'idle';\nlet chargeTarget = 0;\nlet dischargeTarget = 0;\n\nconst canCharge = raw.ankerSoc < LIMITS.ankerMaxSoc;\nconst canDischarge = raw.ankerSoc > LIMITS.ankerMinSoc;\n\nif (surplus > LIMITS.deadbandW && raw.lgSoc >= LIMITS.lgFullSoc && canCharge) {\n    // LG Chem ist voll, es gibt noch Ueberschuss -> Anker laden\n    action = 'charge';\n    chargeTarget = clamp(surplus, 0, LIMITS.ankerMaxChargePower);\n} else if (deficit > LIMITS.deadbandW && raw.lgSoc <= LIMITS.lgEmptySoc && canDischarge) {\n    // LG Chem ist leer, es wird noch importiert -> Anker entladen\n    action = 'discharge';\n    dischargeTarget = clamp(deficit, 0, LIMITS.ankerMaxDischargePower);\n}\n\n// Sicherheits-Hardstops (Zellschutz geht immer vor)\nif (!canDischarge) dischargeTarget = 0;\nif (!canCharge) chargeTarget = 0;\n\n// ---------- 6) HYSTERESE / RATE LIMITING -----------------------\nconst prev = context.get('state') || { action: 'idle', chargeTarget: 0, dischargeTarget: 0, ts: 0 };\nconst now = Date.now();\nconst elapsed = now - prev.ts;\n\nconst actionChanged = action !== prev.action;\nconst chargeDelta = Math.abs(chargeTarget - prev.chargeTarget);\nconst dischargeDelta = Math.abs(dischargeTarget - prev.dischargeTarget);\nconst significantChange = chargeDelta >= LIMITS.minPowerDeltaToResend || dischargeDelta >= LIMITS.minPowerDeltaToResend;\nconst isSafetyOverride = (prev.action === 'discharge' && !canDischarge) || (prev.action === 'charge' && !canCharge);\nconst dueForRefresh = elapsed >= LIMITS.forceResendMs;\n\nlet shouldSend = actionChanged || significantChange || isSafetyOverride || dueForRefresh;\nif (shouldSend && elapsed < LIMITS.minCommandIntervalMs && !isSafetyOverride) {\n    shouldSend = false; // Mindestabstand zwischen Cloud-Befehlen noch nicht erreicht\n}\n\nlet chargeMsg = null;\nlet dischargeMsg = null;\nlet modeMsg = null;\n\nif (shouldSend) {\n    context.set('state', { action, chargeTarget, dischargeTarget, ts: now });\n\n    if (action === 'charge') {\n        chargeMsg = { payload: { chargePower: Math.round(chargeTarget) } };\n        dischargeMsg = { payload: { dischargePower: 0 } };\n        modeMsg = { payload: { mode: 'Manual' } };\n    } else if (action === 'discharge') {\n        dischargeMsg = { payload: { dischargePower: Math.round(dischargeTarget) } };\n        chargeMsg = { payload: { chargePower: 0 } };\n        modeMsg = { payload: { mode: 'Manual' } };\n    } else {\n        chargeMsg = { payload: { chargePower: 0 } };\n        dischargeMsg = { payload: { dischargePower: 0 } };\n        modeMsg = { payload: { mode: 'Self Consumption' } };\n    }\n}\n\nconst statusMsg = {\n    payload: {\n        action,\n        chargeTarget: Math.round(chargeTarget),\n        dischargeTarget: Math.round(dischargeTarget),\n        gridPower,\n        lgSoc: raw.lgSoc,\n        ankerSoc: raw.ankerSoc,\n        befehlGesendet: shouldSend,\n        zeitstempel: new Date(now).toISOString(),\n    },\n};\n\nnode.status({\n    fill: action === 'idle' ? 'grey' : 'green',\n    shape: shouldSend ? 'dot' : 'ring',\n    text: action + (action === 'charge' ? ' ' + Math.round(chargeTarget) + 'W' : action === 'discharge' ? ' ' + Math.round(dischargeTarget) + 'W' : ''),\n});\n\nreturn [chargeMsg, dischargeMsg, modeMsg, statusMsg, null];\n",
+        "outputs": 5,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 460,
+        "y": 140,
+        "wires": [
+            [
+                "srv_charge"
+            ],
+            [
+                "srv_discharge"
+            ],
+            [
+                "srv_mode"
+            ],
+            [
+                "dbg_status"
+            ],
+            [
+                "dbg_warn",
+                "srv_notify_err"
+            ]
+        ]
+    },
+    {
+        "id": "cmt_control",
+        "type": "comment",
+        "z": "tab_anker_control",
+        "name": "⚠ Anker-Ziel-Entities je Installation anpassen (Domain/Service/Entity-ID im Knoten doppelklicken)",
+        "info": "",
+        "x": 500,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "srv_charge",
+        "type": "api-call-service",
+        "z": "tab_anker_control",
+        "name": "Anker: Ladeleistung setzen",
+        "server": "ha_server",
+        "version": 5,
+        "debugenabled": false,
+        "domain": "number",
+        "service": "set_value",
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "number.anker_solarbank_charge_power_limit"
+        ],
+        "data": "{\"value\": {{payload.chargePower}}}",
+        "dataType": "json",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "x": 730,
+        "y": 80,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "srv_discharge",
+        "type": "api-call-service",
+        "z": "tab_anker_control",
+        "name": "Anker: Entladeleistung setzen",
+        "server": "ha_server",
+        "version": 5,
+        "debugenabled": false,
+        "domain": "number",
+        "service": "set_value",
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "number.anker_solarbank_output_power_preset"
+        ],
+        "data": "{\"value\": {{payload.dischargePower}}}",
+        "dataType": "json",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "x": 740,
+        "y": 130,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "srv_mode",
+        "type": "api-call-service",
+        "z": "tab_anker_control",
+        "name": "Anker: Betriebsmodus setzen",
+        "server": "ha_server",
+        "version": 5,
+        "debugenabled": false,
+        "domain": "select",
+        "service": "select_option",
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "select.anker_solarbank_usage_mode"
+        ],
+        "data": "{\"option\": \"{{payload.mode}}\"}",
+        "dataType": "json",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "x": 730,
+        "y": 180,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "dbg_status",
+        "type": "debug",
+        "z": "tab_anker_control",
+        "name": "Status",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 730,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "dbg_warn",
+        "type": "debug",
+        "z": "tab_anker_control",
+        "name": "Warnung",
+        "active": true,
+        "tosidebar": true,
+        "console": true,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 730,
+        "y": 320,
+        "wires": []
+    },
+    {
+        "id": "srv_notify_err",
+        "type": "api-call-service",
+        "z": "tab_anker_control",
+        "name": "HA-Benachrichtigung bei Fehler",
+        "server": "ha_server",
+        "version": 5,
+        "debugenabled": false,
+        "domain": "persistent_notification",
+        "service": "create",
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [],
+        "data": "{\"title\": \"Anker-Steuerung\", \"message\": \"{{payload}}\", \"notification_id\": \"anker_max_control_error\"}",
+        "dataType": "json",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "x": 990,
+        "y": 320,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "catch_err",
+        "type": "catch",
+        "z": "tab_anker_control",
+        "name": "Laufzeitfehler abfangen",
+        "scope": [
+            "fn_decide"
+        ],
+        "uncaught": false,
+        "x": 200,
+        "y": 400,
+        "wires": [
+            [
+                "dbg_catch"
+            ]
+        ]
+    },
+    {
+        "id": "dbg_catch",
+        "type": "debug",
+        "z": "tab_anker_control",
+        "name": "Laufzeitfehler",
+        "active": true,
+        "tosidebar": true,
+        "console": true,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 460,
+        "y": 400,
+        "wires": []
+    }
+]
