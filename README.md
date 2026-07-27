@@ -36,13 +36,21 @@ Regelung ein, deren eigene Eigenverbrauchsoptimierung hat immer Vorrang. Der
 Anker-Speicher wird erst aktiv gesteuert, wenn LG Chem seine Aufgabe nicht mehr abdecken kann:
 
 1. **Laden des Anker:** Es fließt PV-Überschuss ins Netz (Einspeisung) **und** LG Chem ist
-   bereits (nahezu) voll (SOC ≥ `lgFullSoc`, Standard 95 %) → der übrige Überschuss wird zum
-   Laden des Anker verwendet (begrenzt auf dessen SOC-Obergrenze und maximale Ladeleistung).
+   bereits (nahezu) voll (SOC ≥ `lgFullSoc`, Standard 95 %) **und** lädt aktuell nicht mehr
+   nennenswert (Batterieleistung ≤ `lgIdlePowerW`, Standard 50 W) → der übrige Überschuss
+   wird zum Laden des Anker verwendet (begrenzt auf dessen SOC-Obergrenze und maximale
+   Ladeleistung).
 2. **Entladen des Anker:** Es wird Strom aus dem Netz bezogen **und** LG Chem ist bereits
-   (nahezu) leer (SOC ≤ `lgEmptySoc`, Standard 10 %) → der Anker deckt den restlichen Bedarf
+   (nahezu) leer (SOC ≤ `lgEmptySoc`, Standard 10 %) **und** entlädt aktuell nicht mehr
+   nennenswert (Batterieleistung ≥ `-lgIdlePowerW`) → der Anker deckt den restlichen Bedarf
    (begrenzt auf dessen SOC-Untergrenze und maximale Entladeleistung).
 3. **Sonst (idle):** LG Chem deckt die Situation selbst ab → der Anker bleibt im
    Eigenverbrauchs-/Ruhemodus und wird nicht angesteuert.
+
+Die zusätzliche Prüfung der tatsächlichen LG-Chem-Lade-/Entladeleistung (nicht nur des SOC)
+verhindert, dass der Anker zu früh eingreift, während SolarEdge/LG Chem den Speicher noch
+aktiv lädt oder entlädt – sonst würden beide Systeme um denselben Überschuss/Bedarf
+konkurrieren.
 
 Zusätzliche Schutzmechanismen:
 
@@ -120,6 +128,7 @@ Attribut `options:` der jeweiligen Entity.
 | `ENTITIES.gridPower` | Netzleistung (SolarEdge-Zähler), + = Bezug / − = Einspeisung | Funktionsknoten |
 | `ENTITIES.gridPowerSign` | `1` oder `-1`, falls dein Sensor umgekehrtes Vorzeichen liefert | Funktionsknoten |
 | `ENTITIES.lgSoc` | Ladestand (%) des LG-Chem-Speichers | Funktionsknoten |
+| `ENTITIES.lgPower` | Lade-/Entladeleistung (W) des LG-Chem-Speichers, + = lädt / − = entlädt | Funktionsknoten |
 | `ENTITIES.ankerSoc` | Ladestand (%) des Anker MAX AC | Funktionsknoten |
 | `select.anker_solarbank_usage_mode` (Platzhalter) | Betriebsmodus-Auswahl, Rohwert `third_party_control` | Knoten „Anker: Betriebsmodus setzen“ |
 | `select.anker_solarbank_power_flow` (Platzhalter) | Richtung, Rohwerte `charge`/`discharge` | Knoten „Anker: Richtung setzen“ |
@@ -136,6 +145,7 @@ Attribut `options:` der jeweiligen Entity.
 | `ankerMinSoc` / `ankerMaxSoc` | 10 % / 95 % | Zellschutz-Grenzen des Anker |
 | `ankerMaxChargePower` / `ankerMaxDischargePower` | 1200 W / 1800 W | Leistungsgrenzen laut Datenblatt |
 | `lgFullSoc` / `lgEmptySoc` | 95 % / 10 % | Ab wann LG Chem als „voll“/„leer“ gilt |
+| `lgIdlePowerW` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadbandW` | 60 W | Totband gegen Flattern |
 | `minCommandIntervalMs` | 90 000 ms | Mindestabstand zwischen Cloud-Befehlen |
 | `minPowerDeltaToResend` | 50 W | Nötige Änderung, damit ein Befehl erneut gesendet wird |
@@ -218,6 +228,7 @@ Nach dem Neustart erscheinen automatisch folgende neue Entities:
 |---|---|---|
 | `grid_power_entity` | Netzleistung (SolarEdge-Zähler) | `sensor.solaredge_i1_m1_ac_power` |
 | `lg_soc_entity` | Ladestand (%) des LG-Chem-Speichers | `sensor.solaredge_i1_b1_state_of_energy` |
+| `lg_power_entity` | Lade-/Entladeleistung (W) des LG-Chem-Speichers, + = lädt / − = entlädt | `sensor.solaredge_i1_b1_dc_power` |
 | `anker_soc_entity` | Ladestand (%) des Anker MAX AC | `sensor.anker_solix_solarbank_max_ac_soc` |
 | Betriebsmodus (Automation) | s. Tabelle oben | fest auf `third_party_control` |
 | Leistungsfluss (Automation) | s. Tabelle oben | `charge`/`discharge` je nach Aktion |
@@ -235,6 +246,7 @@ Nach dem Neustart erscheinen automatisch folgende neue Entities:
 | `min_soc` / `max_soc` | 10 % / 95 % | Zellschutz-Grenzen des Anker |
 | `max_charge_power` / `max_discharge_power` | 1200 W / 1800 W | Leistungsgrenzen laut Datenblatt |
 | `lg_full_soc` / `lg_empty_soc` | 95 % / 10 % | Ab wann LG Chem als „voll“/„leer“ gilt |
+| `lg_idle_power_w` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadband_w` | 60 W | Totband gegen Flattern |
 | *(fest im Automation-Code)* `min_interval_ok` | 90 s | Mindestabstand zwischen Cloud-Befehlen |
 | *(fest im Automation-Code)* `significant_change` | 50 W | Nötige Änderung, damit ein Befehl erneut gesendet wird |
@@ -250,10 +262,13 @@ sich bei Bedarf direkt in den `variables:` der Automation ändern (Suche nach `>
   in `configuration.yaml` prüfen, Pfad/Dateiname kontrollieren, Home Assistant neu starten
   (nicht nur „YAML neu laden“) und unter *Entwicklerwerkzeuge → YAML → Konfiguration
   prüfen* auf Fehler achten.
-- **`sensor.anker_control_aktion` zeigt `unavailable`:** Eine der drei Pflicht-Entities
-  (`grid_power_entity`, `lg_soc_entity`, `anker_soc_entity`) liefert `unavailable`/`unknown`
-  oder die Entity-ID stimmt nicht – es erscheint zusätzlich eine persistente Benachrichtigung
-  in Home Assistant.
+- **`sensor.anker_control_aktion` zeigt `unavailable`:** Eine der vier Pflicht-Entities
+  (`grid_power_entity`, `lg_soc_entity`, `lg_power_entity`, `anker_soc_entity`) liefert
+  `unavailable`/`unknown` oder die Entity-ID stimmt nicht – es erscheint zusätzlich eine
+  persistente Benachrichtigung in Home Assistant.
+- **Anker springt trotz `lg_full_soc`/`lg_empty_soc` nicht an:** Prüfen, ob
+  `sensor.solaredge_i1_b1_dc_power` gerade über/unter `lg_idle_power_w` liegt – solange
+  LG Chem noch aktiv lädt/entlädt, bleibt der Anker absichtlich inaktiv.
 - **Befehle kommen nicht an:** Die `service`/`entity_id`-Kombinationen in der Automation unter
   *Entwicklerwerkzeuge → Dienste* testweise manuell aufrufen; Automations-Traces
   (*Einstellungen → Automatisierungen → „Anker Control: Entscheidung anwenden“ → Traces*)

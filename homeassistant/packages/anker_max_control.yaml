@@ -52,6 +52,7 @@ template:
       # ---------- Entity-IDs dieser Installation ----------
       grid_power_entity: sensor.solaredge_i1_m1_ac_power
       lg_soc_entity: sensor.solaredge_i1_b1_state_of_energy
+      lg_power_entity: sensor.solaredge_i1_b1_dc_power   # + = LG Chem lädt, - = LG Chem entlädt
       anker_soc_entity: sensor.anker_solix_solarbank_max_ac_soc
       # + = Bezug / - = Einspeisung erwartet. SolarEdge-Standard ist
       # "negativ = Einspeisung" -> sign 1 passt dann ohne Umrechnung.
@@ -64,6 +65,7 @@ template:
       max_soc: 95                 # % - nie über diesen Wert laden (Zellschutz)
       lg_full_soc: 95             # % - ab hier gilt LG Chem als "voll genug"
       lg_empty_soc: 10            # % - ab hier gilt LG Chem als "leer"
+      lg_idle_power_w: 50         # W - LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung unter diesem Wert liegt
       deadband_w: 60              # W - Totband gegen Flattern
       max_charge_power: 1200      # W - siehe Datenblatt Anker MAX AC
       max_discharge_power: 1800   # W - siehe Datenblatt Anker MAX AC
@@ -72,13 +74,19 @@ template:
       grid_power_raw: "{{ states(grid_power_entity) | float(0) }}"
       grid_power: "{{ grid_power_raw * grid_power_sign }}"
       lg_soc: "{{ states(lg_soc_entity) | float(-1) }}"
+      lg_power: "{{ states(lg_power_entity) | float(0) }}"
       anker_soc: "{{ states(anker_soc_entity) | float(-1) }}"
-      sensors_ok: "{{ states(grid_power_entity) not in ['unknown','unavailable',none] and states(lg_soc_entity) not in ['unknown','unavailable',none] and states(anker_soc_entity) not in ['unknown','unavailable',none] }}"
+      sensors_ok: "{{ states(grid_power_entity) not in ['unknown','unavailable',none] and states(lg_soc_entity) not in ['unknown','unavailable',none] and states(lg_power_entity) not in ['unknown','unavailable',none] and states(anker_soc_entity) not in ['unknown','unavailable',none] }}"
       surplus: "{{ -grid_power }}"
       deficit: "{{ grid_power }}"
       can_charge: "{{ anker_soc < max_soc }}"
       can_discharge: "{{ anker_soc > min_soc }}"
-      action: "{{ 'unavailable' if not sensors_ok else ('charge' if (surplus > deadband_w and lg_soc >= lg_full_soc and can_charge) else ('discharge' if (deficit > deadband_w and lg_soc <= lg_empty_soc and can_discharge) else 'idle')) }}"
+      # LG Chem gilt nur dann als "gesättigt" (voll/leer), wenn zusätzlich zum SOC-Schwellenwert
+      # auch die tatsächliche Lade-/Entladeleistung nahe Null ist - sonst lädt/entlädt SolarEdge
+      # den Speicher noch aktiv, und der Anker würde unnötig mit ihm konkurrieren.
+      lg_saturated_full: "{{ lg_soc >= lg_full_soc and lg_power <= lg_idle_power_w }}"
+      lg_saturated_empty: "{{ lg_soc <= lg_empty_soc and lg_power >= -lg_idle_power_w }}"
+      action: "{{ 'unavailable' if not sensors_ok else ('charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else ('discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else 'idle')) }}"
       charge_target: "{{ ([surplus, max_charge_power] | min) | round(0) if action == 'charge' else 0 }}"
       discharge_target: "{{ ([deficit, max_discharge_power] | min) | round(0) if action == 'discharge' else 0 }}"
     sensor:
@@ -89,6 +97,9 @@ template:
         attributes:
           grid_power_w: "{{ grid_power | round(0) }}"
           lg_soc: "{{ lg_soc }}"
+          lg_power_w: "{{ lg_power | round(0) }}"
+          lg_saturated_full: "{{ lg_saturated_full }}"
+          lg_saturated_empty: "{{ lg_saturated_empty }}"
           anker_soc: "{{ anker_soc }}"
           can_charge: "{{ can_charge }}"
           can_discharge: "{{ can_discharge }}"
