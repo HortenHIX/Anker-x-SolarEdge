@@ -155,6 +155,10 @@ automation:
               title: "Anker-Steuerung"
               message: "Pflicht-Sensor(en) nicht verfügbar - keine Aktion ausgeführt."
               notification_id: anker_control_error
+        else:
+          - service: persistent_notification.dismiss
+            data:
+              notification_id: anker_control_error
       - if:
           - condition: template
             value_template: "{{ should_send }}"
