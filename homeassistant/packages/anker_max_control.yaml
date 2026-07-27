@@ -3,15 +3,24 @@
 # Reine Home-Assistant-Lösung (Helper + Template-Sensoren +
 # Automation) - ohne Node-RED.
 #
+# Bereits mit den echten Entity-IDs dieser Installation befüllt:
+#   - SolarEdge Modbus Multi (Zähler M1, Batterie B1 = LG Chem)
+#   - Anker SOLIX Solarbank Max AC (Integration ha-anker-solix),
+#     Steuerung über den nativen "Drittanbieter-Steuerung"-Modus
+#     (Richtung charge/discharge + Ziel-Watt über "Netzleistung")
+#
 # Installation:
 #   1. In configuration.yaml sicherstellen, dass Packages aktiv sind:
 #        homeassistant:
 #          packages: !include_dir_named packages
 #   2. Diese Datei nach <config>/packages/anker_max_control.yaml legen.
-#   3. Unten im Abschnitt "ANPASSEN" die Entity-IDs an die eigene
-#      Anlage anpassen (SolarEdge-Zähler, LG-Chem-SOC, Anker-Entities).
+#   3. Einmalig im Anker-Gerät (App oder HA-Steuerelemente) die
+#      SOC-Schutzgrenzen setzen: Entladegrenze = 10 %, Ladeobergrenze = 95 %
+#      (siehe min_soc/max_soc unten - sollten übereinstimmen).
 #   4. Home Assistant neu starten (Packages werden nicht durch
 #      "YAML neu laden" übernommen, nur durch einen Neustart).
+#   5. `grid_power_sign` unten nach dem ersten Praxistest prüfen (siehe
+#      Kommentar dort) und bei Bedarf auf -1 stellen.
 #
 # Siehe README.md für Details zur Logik, Parametern und Fehlersuche.
 # ============================================================
@@ -28,14 +37,8 @@ input_text:
     initial: "idle"
 
 input_number:
-  anker_control_last_charge_target:
-    name: "Anker Control: Zuletzt gesendete Ladeleistung"
-    min: 0
-    max: 10000
-    step: 1
-    unit_of_measurement: "W"
-  anker_control_last_discharge_target:
-    name: "Anker Control: Zuletzt gesendete Entladeleistung"
+  anker_control_last_power:
+    name: "Anker Control: Zuletzt gesendete Zielleistung"
     min: 0
     max: 10000
     step: 1
@@ -46,11 +49,15 @@ template:
       - trigger: time_pattern
         seconds: "/30"
     variables:
-      # ---------- ANPASSEN: Entity-IDs an eigene Installation ----------
-      grid_power_entity: sensor.solaredge_m1_ac_power
-      lg_soc_entity: sensor.solaredge_battery_state_of_energy
-      anker_soc_entity: sensor.anker_solarbank_state_of_charge
-      grid_power_sign: 1   # auf -1 stellen, falls Vorzeichen umgekehrt ist (+ = Bezug / - = Einspeisung erwartet)
+      # ---------- Entity-IDs dieser Installation ----------
+      grid_power_entity: sensor.solaredge_i1_m1_ac_power
+      lg_soc_entity: sensor.solaredge_i1_b1_state_of_energy
+      anker_soc_entity: sensor.anker_solix_solarbank_max_ac_soc
+      # + = Bezug / - = Einspeisung erwartet. SolarEdge-Standard ist
+      # "negativ = Einspeisung" -> sign 1 passt dann ohne Umrechnung.
+      # PRÜFEN: Wenn der Anker nach der Installation genau verkehrt herum
+      # reagiert (lädt bei Netzbezug statt bei Überschuss), hier auf -1 stellen.
+      grid_power_sign: 1
 
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
@@ -100,8 +107,9 @@ automation:
   - id: anker_control_apply
     alias: "Anker Control: Entscheidung anwenden"
     description: >-
-      Sendet Lade-/Entlade-/Modus-Befehle an den Anker MAX AC, sobald sich
-      die berechnete Zielaktion relevant ändert (mit Hysterese, Mindestabstand
+      Setzt beim Anker MAX AC den Drittanbieter-Steuermodus sowie Richtung
+      (charge/discharge) und Ziel-Watt ("Netzleistung"), sobald sich die
+      berechnete Zielaktion relevant ändert (mit Hysterese, Mindestabstand
       zwischen Cloud-Befehlen und Sicherheits-Override bei SOC-Grenzen).
     trigger:
       - trigger: time_pattern
@@ -111,19 +119,21 @@ automation:
     action:
       - variables:
           action: "{{ states('sensor.anker_control_aktion') }}"
-          anker_soc_now: "{{ state_attr('sensor.anker_control_aktion', 'anker_soc') | float(-1) }}"
+          can_charge_now: "{{ state_attr('sensor.anker_control_aktion', 'can_charge') }}"
+          can_discharge_now: "{{ state_attr('sensor.anker_control_aktion', 'can_discharge') }}"
           charge_target: "{{ states('sensor.anker_control_ladeleistung_soll') | float(0) }}"
           discharge_target: "{{ states('sensor.anker_control_entladeleistung_soll') | float(0) }}"
+          target_direction: "{{ 'charge' if action == 'charge' else 'discharge' }}"
+          target_power: "{{ charge_target if action == 'charge' else (discharge_target if action == 'discharge' else 0) }}"
           prev_action: "{{ states('input_text.anker_control_last_action') }}"
-          prev_charge: "{{ states('input_number.anker_control_last_charge_target') | float(0) }}"
-          prev_discharge: "{{ states('input_number.anker_control_last_discharge_target') | float(0) }}"
+          prev_power: "{{ states('input_number.anker_control_last_power') | float(0) }}"
           last_cmd_ts: "{{ states('input_datetime.anker_control_last_command') }}"
           seconds_since_last: "{{ now().timestamp() - (last_cmd_ts | as_timestamp(0)) }}"
           action_changed: "{{ action != prev_action }}"
-          significant_change: "{{ (charge_target - prev_charge) | abs >= 50 or (discharge_target - prev_discharge) | abs >= 50 }}"
+          significant_change: "{{ (target_power - prev_power) | abs >= 50 }}"
           due_for_refresh: "{{ seconds_since_last >= 600 }}"
           min_interval_ok: "{{ seconds_since_last >= 90 }}"
-          safety_override: "{{ (prev_action == 'discharge' and anker_soc_now <= 10) or (prev_action == 'charge' and anker_soc_now >= 95) }}"
+          safety_override: "{{ (prev_action == 'discharge' and not can_discharge_now) or (prev_action == 'charge' and not can_charge_now) }}"
           should_send: "{{ action != 'unavailable' and (safety_override or ((action_changed or significant_change or due_for_refresh) and min_interval_ok)) }}"
       - if:
           - condition: template
@@ -138,65 +148,21 @@ automation:
           - condition: template
             value_template: "{{ should_send }}"
         then:
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action == 'charge' }}"
-                sequence:
-                  # ---------- ANPASSEN: Entity-IDs/Services der Anker-Integration ----------
-                  - service: number.set_value
-                    target:
-                      entity_id: number.anker_solarbank_charge_power_limit
-                    data:
-                      value: "{{ charge_target }}"
-                  - service: number.set_value
-                    target:
-                      entity_id: number.anker_solarbank_output_power_preset
-                    data:
-                      value: 0
-                  - service: select.select_option
-                    target:
-                      entity_id: select.anker_solarbank_usage_mode
-                    data:
-                      option: "Manual"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action == 'discharge' }}"
-                sequence:
-                  - service: number.set_value
-                    target:
-                      entity_id: number.anker_solarbank_output_power_preset
-                    data:
-                      value: "{{ discharge_target }}"
-                  - service: number.set_value
-                    target:
-                      entity_id: number.anker_solarbank_charge_power_limit
-                    data:
-                      value: 0
-                  - service: select.select_option
-                    target:
-                      entity_id: select.anker_solarbank_usage_mode
-                    data:
-                      option: "Manual"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ action == 'idle' }}"
-                sequence:
-                  - service: number.set_value
-                    target:
-                      entity_id: number.anker_solarbank_charge_power_limit
-                    data:
-                      value: 0
-                  - service: number.set_value
-                    target:
-                      entity_id: number.anker_solarbank_output_power_preset
-                    data:
-                      value: 0
-                  - service: select.select_option
-                    target:
-                      entity_id: select.anker_solarbank_usage_mode
-                    data:
-                      option: "Self Consumption"
+          - service: select.select_option
+            target:
+              entity_id: select.anker_solix_solarbank_max_ac_betriebsmodus_gerat_lauft_im_drittanbieter_steuermodus
+            data:
+              option: "third_party_control"
+          - service: select.select_option
+            target:
+              entity_id: select.anker_solix_solarbank_max_ac_leistungsfluss
+            data:
+              option: "{{ target_direction }}"
+          - service: number.set_value
+            target:
+              entity_id: number.anker_solix_solarbank_max_ac_netzleistung
+            data:
+              value: "{{ target_power }}"
           - service: input_text.set_value
             target:
               entity_id: input_text.anker_control_last_action
@@ -204,14 +170,9 @@ automation:
               value: "{{ action }}"
           - service: input_number.set_value
             target:
-              entity_id: input_number.anker_control_last_charge_target
+              entity_id: input_number.anker_control_last_power
             data:
-              value: "{{ charge_target }}"
-          - service: input_number.set_value
-            target:
-              entity_id: input_number.anker_control_last_discharge_target
-            data:
-              value: "{{ discharge_target }}"
+              value: "{{ target_power }}"
           - service: input_datetime.set_datetime
             target:
               entity_id: input_datetime.anker_control_last_command

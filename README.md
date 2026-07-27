@@ -90,13 +90,28 @@ Zusätzliche Schutzmechanismen:
    (falls noch kein Server-Knoten existiert bzw. einen vorhandenen wiederverwenden).
 3. Den Funktionsknoten **„Optimale Steuerung berechnen“** öffnen und im Codeblock
    `ENTITIES` die Entity-IDs an deine Installation anpassen (siehe Tabelle unten).
-4. Die drei Service-Call-Knoten **„Anker: Ladeleistung setzen“**, **„Anker: Entladeleistung
-   setzen“** und **„Anker: Betriebsmodus setzen“** öffnen und jeweils `entityId` (und bei
+4. Die drei Service-Call-Knoten **„Anker: Betriebsmodus setzen“**, **„Anker: Richtung
+   setzen“** und **„Anker: Zielleistung setzen“** öffnen und jeweils `entityId` (und bei
    Bedarf `domain`/`service`) auf die tatsächlichen Entities deiner Anker-Integration setzen.
 5. Grenzwerte im Codeblock `LIMITS` an dein Anker-MAX-AC-Modell (Datenblatt: max.
    Lade-/Entladeleistung) sowie an deine Präferenzen anpassen.
 6. Deployen. Der Flow prüft danach automatisch alle 30 Sekunden den Zustand der Anlage
    (Inject-Knoten „Alle 30s prüfen“); zum Testen steht zusätzlich „Manuell auslösen“ bereit.
+
+## Steuerkonzept
+
+Viele Anker-SOLIX-Geräte (z. B. Solarbank Max AC über die Integration
+[`ha-anker-solix`](https://github.com/thomluther/ha-anker-solix)) bieten einen eigenen
+**„Drittanbieter-Steuerung“-Modus** (Rohwert: `third_party_control`) statt separater
+Lade-/Entladeleistungs-Limits: Man wählt eine **Richtung** (`charge`/`discharge`) und gibt
+eine **Ziel-Watt-Zahl** vor. Genau darauf ist dieser Flow ausgelegt. Falls deine
+Anker-Integration ein anderes Steuerkonzept hat, müssen die drei Service-Call-Knoten
+entsprechend umgebaut werden (siehe Kommentar im Funktionsknoten).
+
+**Wichtig:** Die in der App/HA-UI angezeigten deutschen Texte (z. B. „Drittanbieter-Steuerung“,
+„Netzbezug“) sind nur Anzeigenamen – an `select.select_option` müssen die zugrunde liegenden
+Rohwerte gesendet werden. Diese findest du unter *Entwicklerwerkzeuge → Zustände* im
+Attribut `options:` der jeweiligen Entity.
 
 ## Zu konfigurierende Entities
 
@@ -106,15 +121,13 @@ Zusätzliche Schutzmechanismen:
 | `ENTITIES.gridPowerSign` | `1` oder `-1`, falls dein Sensor umgekehrtes Vorzeichen liefert | Funktionsknoten |
 | `ENTITIES.lgSoc` | Ladestand (%) des LG-Chem-Speichers | Funktionsknoten |
 | `ENTITIES.ankerSoc` | Ladestand (%) des Anker MAX AC | Funktionsknoten |
-| `number.anker_solarbank_charge_power_limit` (Platzhalter) | Steuerbare Ladeleistung des Anker | Knoten „Anker: Ladeleistung setzen“ |
-| `number.anker_solarbank_output_power_preset` (Platzhalter) | Steuerbare Ausgangs-/Entladeleistung des Anker | Knoten „Anker: Entladeleistung setzen“ |
-| `select.anker_solarbank_usage_mode` (Platzhalter) | Betriebsmodus-Auswahl des Anker (z. B. „Manual“/„Self Consumption“) | Knoten „Anker: Betriebsmodus setzen“ |
+| `select.anker_solarbank_usage_mode` (Platzhalter) | Betriebsmodus-Auswahl, Rohwert `third_party_control` | Knoten „Anker: Betriebsmodus setzen“ |
+| `select.anker_solarbank_power_flow` (Platzhalter) | Richtung, Rohwerte `charge`/`discharge` | Knoten „Anker: Richtung setzen“ |
+| `number.anker_solarbank_grid_power` (Platzhalter) | Ziel-Leistung in Watt | Knoten „Anker: Zielleistung setzen“ |
 
-> Die genauen Entity- und Service-Namen hängen von der jeweils verwendeten Anker-Integration
-> und Firmware-Version ab. Prüfe in Home Assistant unter *Entwicklerwerkzeuge → Zustände*
-> bzw. *→ Dienste*, wie deine Entities tatsächlich heißen, und trage sie entsprechend ein.
-> Falls deine Integration keinen eigenen Betriebsmodus-Schalter besitzt, kannst du den Knoten
-> „Anker: Betriebsmodus setzen“ einfach unverbunden lassen bzw. löschen.
+> Die genauen Entity- und Rohwert-Namen hängen von der jeweils verwendeten Anker-Integration
+> und Firmware-Version ab. Prüfe in Home Assistant unter *Entwicklerwerkzeuge → Zustände*,
+> wie deine Entities tatsächlich heißen und welche `options:` sie akzeptieren.
 
 ## Wichtige Parameter (im Funktionsknoten, Block `LIMITS`)
 
@@ -149,6 +162,27 @@ Befehle an den Anker sendet. Keine zusätzliche Software nötig – läuft kompl
 Assistant.
 
 Datei: [`homeassistant/packages/anker_max_control.yaml`](homeassistant/packages/anker_max_control.yaml)
+– bereits mit den realen Entity-IDs dieser Installation befüllt (SolarEdge Modbus Multi +
+Anker SOLIX Solarbank Max AC über `ha-anker-solix`).
+
+### Steuerkonzept des Anker SOLIX Solarbank Max AC
+
+Diese Anker-Integration bietet einen eigenen **„Drittanbieter-Steuerung“-Modus**
+(`third_party_control`), der genau für externe Automatisierung gedacht ist. Die Steuerung
+läuft über drei native Felder statt über separate Lade-/Entlade-Leistungslimits:
+
+| Feld (Anzeige in der App/HA) | Entity | Rohwerte |
+|---|---|---|
+| Betriebsmodus | `select.anker_solix_solarbank_max_ac_betriebsmodus_gerat_lauft_im_drittanbieter_steuermodus` | `third_party_control` / `custom_mode` |
+| Leistungsfluss | `select.anker_solix_solarbank_max_ac_leistungsfluss` | `charge` / `discharge` |
+| Netzleistung | `number.anker_solix_solarbank_max_ac_netzleistung` | Ziel-Watt |
+| Entladegrenze | `number.anker_solix_solarbank_max_ac_entladegrenze` | % (Zellschutz, geräteseitig) |
+| Ladeobergrenze | `number.anker_solix_solarbank_max_ac_ladeobergrenze` | % (Zellschutz, geräteseitig) |
+
+**Wichtig:** Die in der App/HA-UI angezeigten deutschen Texte („Drittanbieter-Steuerung“,
+„Netzbezug“ …) sind nur übersetzte Anzeigenamen – die Automation muss die englischen
+Rohwerte (`third_party_control`, `charge`, `discharge`) an `select.select_option` senden,
+sonst schlägt der Befehl fehl. Das ist in der Datei bereits korrekt hinterlegt.
 
 ## Installation
 
@@ -159,17 +193,14 @@ Datei: [`homeassistant/packages/anker_max_control.yaml`](homeassistant/packages/
    ```
 2. Die Datei `homeassistant/packages/anker_max_control.yaml` aus diesem Repository nach
    `<dein-ha-config-verzeichnis>/packages/anker_max_control.yaml` kopieren.
-3. Im Abschnitt **„ANPASSEN“** (oben im `template:`-Block) die drei Entity-IDs
-   `grid_power_entity`, `lg_soc_entity`, `anker_soc_entity` sowie ggf. `grid_power_sign`
-   an deine Installation anpassen.
-4. Im Abschnitt **„ANPASSEN“** der Automation (`sequence:` der drei `choose:`-Zweige) die
-   `entity_id`s der Anker-Steuer-Entities (`number.anker_solarbank_charge_power_limit`,
-   `number.anker_solarbank_output_power_preset`, `select.anker_solarbank_usage_mode`) auf
-   die tatsächlichen Entities deiner Anker-Integration setzen.
-5. Bei Bedarf die Grenzwerte (`min_soc`, `max_soc`, `lg_full_soc`, `lg_empty_soc`,
-   `deadband_w`, `max_charge_power`, `max_discharge_power`) direkt im Template anpassen.
-6. **Home Assistant neu starten** (Packages werden nur beim Neustart eingelesen, nicht
+3. **Einmalig** im Anker-Gerät (App oder HA-Steuerelemente) die SOC-Schutzgrenzen setzen:
+   **Entladegrenze = 10 %**, **Ladeobergrenze = 95 %** (passend zu `min_soc`/`max_soc`
+   unten in der Datei – bei dir standen sie zuletzt auf 5 %/100 %).
+4. **Home Assistant neu starten** (Packages werden nur beim Neustart eingelesen, nicht
    durch „YAML neu laden“).
+5. Nach dem ersten Praxistest `grid_power_sign` prüfen (siehe Kommentar in der Datei) und
+   bei Bedarf auf `-1` stellen – falls der Anker genau verkehrt herum reagiert (lädt bei
+   Netzbezug statt bei Überschuss, oder umgekehrt).
 
 Nach dem Neustart erscheinen automatisch folgende neue Entities:
 
@@ -177,26 +208,25 @@ Nach dem Neustart erscheinen automatisch folgende neue Entities:
   `grid_power_w`, `lg_soc`, `anker_soc`, `can_charge`, `can_discharge`)
 - `sensor.anker_control_ladeleistung_soll` / `sensor.anker_control_entladeleistung_soll` (W)
 - Helper `input_datetime.anker_control_last_command`, `input_text.anker_control_last_action`,
-  `input_number.anker_control_last_charge_target` / `..._last_discharge_target` (interne
-  Zustandsspeicherung für Hysterese/Rate-Limiting, nicht manuell verändern)
+  `input_number.anker_control_last_power` (interne Zustandsspeicherung für
+  Hysterese/Rate-Limiting, nicht manuell verändern)
 - Automation **„Anker Control: Entscheidung anwenden“**
 
 ## Zu konfigurierende Entities
 
-| Schlüssel/Bereich | Bedeutung | Ort |
+| Schlüssel/Bereich | Bedeutung | Wert in dieser Installation |
 |---|---|---|
-| `grid_power_entity` | Netzleistung (SolarEdge-Zähler), + = Bezug / − = Einspeisung | `template:` → `variables:` |
-| `grid_power_sign` | `1` oder `-1`, falls Vorzeichen umgekehrt ist | `template:` → `variables:` |
-| `lg_soc_entity` | Ladestand (%) des LG-Chem-Speichers | `template:` → `variables:` |
-| `anker_soc_entity` | Ladestand (%) des Anker MAX AC | `template:` → `variables:` |
-| `number.anker_solarbank_charge_power_limit` (Platzhalter) | Steuerbare Ladeleistung des Anker | Automation, `choose:`-Zweig „charge“/„idle“ |
-| `number.anker_solarbank_output_power_preset` (Platzhalter) | Steuerbare Ausgangs-/Entladeleistung des Anker | Automation, `choose:`-Zweig „discharge“/„idle“ |
-| `select.anker_solarbank_usage_mode` (Platzhalter) | Betriebsmodus-Auswahl des Anker | Automation, alle drei `choose:`-Zweige |
+| `grid_power_entity` | Netzleistung (SolarEdge-Zähler) | `sensor.solaredge_i1_m1_ac_power` |
+| `lg_soc_entity` | Ladestand (%) des LG-Chem-Speichers | `sensor.solaredge_i1_b1_state_of_energy` |
+| `anker_soc_entity` | Ladestand (%) des Anker MAX AC | `sensor.anker_solix_solarbank_max_ac_soc` |
+| Betriebsmodus (Automation) | s. Tabelle oben | fest auf `third_party_control` |
+| Leistungsfluss (Automation) | s. Tabelle oben | `charge`/`discharge` je nach Aktion |
+| Netzleistung (Automation) | s. Tabelle oben | berechnete Ziel-Watt |
 
-> Wie bei der Node-RED-Variante: Die genauen Entity-/Service-Namen hängen von deiner
-> Anker-Integration ab – unter *Entwicklerwerkzeuge → Zustände* bzw. *→ Dienste* prüfen.
-> Fehlt ein Betriebsmodus-Schalter, einfach die drei `select.select_option`-Schritte aus
-> der Automation entfernen.
+> Falls du die Datei auf ein anderes Anker-Gerät/eine andere Installation überträgst,
+> sind die Entity-IDs vermutlich anders benannt (Zahlen-Suffixe, Gerätename) – über
+> *Entwicklerwerkzeuge → Zustände* mit Suchbegriff „anker“ bzw. „solaredge“ prüfen und in
+> der Datei anpassen.
 
 ## Wichtige Parameter (im `template:`-Block, Abschnitt „Grenzwerte“)
 
