@@ -54,11 +54,10 @@ template:
       lg_soc_entity: sensor.solaredge_i1_b1_state_of_energy
       lg_power_entity: sensor.solaredge_i1_b1_dc_power   # + = LG Chem lädt, - = LG Chem entlädt
       anker_soc_entity: sensor.anker_solix_solarbank_max_ac_soc
-      # + = Bezug / - = Einspeisung erwartet. SolarEdge-Standard ist
-      # "negativ = Einspeisung" -> sign 1 passt dann ohne Umrechnung.
-      # PRÜFEN: Wenn der Anker nach der Installation genau verkehrt herum
-      # reagiert (lädt bei Netzbezug statt bei Überschuss), hier auf -1 stellen.
-      grid_power_sign: 1
+      # + = Bezug / - = Einspeisung erwartet. Bei dieser Installation liefert
+      # der Sensor umgekehrtes Vorzeichen (negativ = Bezug, positiv =
+      # Einspeisung) - per Praxistest am 30.07.2026 bestätigt, daher -1.
+      grid_power_sign: -1
 
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)

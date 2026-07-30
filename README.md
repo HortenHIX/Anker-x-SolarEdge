@@ -208,9 +208,10 @@ sonst schlägt der Befehl fehl. Das ist in der Datei bereits korrekt hinterlegt.
    unten in der Datei – bei dir standen sie zuletzt auf 5 %/100 %).
 4. **Home Assistant neu starten** (Packages werden nur beim Neustart eingelesen, nicht
    durch „YAML neu laden“).
-5. Nach dem ersten Praxistest `grid_power_sign` prüfen (siehe Kommentar in der Datei) und
-   bei Bedarf auf `-1` stellen – falls der Anker genau verkehrt herum reagiert (lädt bei
-   Netzbezug statt bei Überschuss, oder umgekehrt).
+5. `grid_power_sign` ist für diese Installation bereits korrekt auf `-1` gesetzt (per
+   Praxistest am 30.07.2026 bestätigt: `sensor.solaredge_i1_m1_ac_power` liefert negativ =
+   Bezug, positiv = Einspeisung). Überträgst du die Datei auf eine andere Installation,
+   ggf. erneut prüfen (siehe Kommentar in der Datei).
 
 Nach dem Neustart erscheinen automatisch folgende neue Entities:
 
