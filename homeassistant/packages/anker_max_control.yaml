@@ -62,8 +62,9 @@ template:
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
       max_soc: 95                 # % - nie über diesen Wert laden (Zellschutz)
-      lg_full_soc: 95             # % - ab hier gilt LG Chem als "voll genug"
-      lg_empty_soc: 10            # % - ab hier gilt LG Chem als "leer"
+      lg_full_soc: 95             # % - grober Richtwert "voll genug"; die tatsaechliche Bestaetigung liefert lg_idle_power_w
+      lg_empty_soc: 20            # % - grober Richtwert "leer genug"; LG Chem stoppt evtl. schon vorher (eigene Notstromreserve),
+                                   #     entscheidend ist die Leistungspruefung unten, dieser Wert ist nur eine grosszuegige Obergrenze
       lg_idle_power_w: 50         # W - LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung unter diesem Wert liegt
       deadband_w: 60              # W - Totband gegen Flattern
       max_charge_power: 1200      # W - siehe Datenblatt Anker MAX AC

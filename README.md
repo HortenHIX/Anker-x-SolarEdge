@@ -144,7 +144,7 @@ Attribut `options:` der jeweiligen Entity.
 |---|---|---|
 | `ankerMinSoc` / `ankerMaxSoc` | 10 % / 95 % | Zellschutz-Grenzen des Anker |
 | `ankerMaxChargePower` / `ankerMaxDischargePower` | 1200 W / 1800 W | Leistungsgrenzen laut Datenblatt |
-| `lgFullSoc` / `lgEmptySoc` | 95 % / 10 % | Ab wann LG Chem als „voll“/„leer“ gilt |
+| `lgFullSoc` / `lgEmptySoc` | 95 % / 20 % | Großzügige SOC-Obergrenze für „voll“/„leer genug“ – die eigentliche Bestätigung liefert `lgIdlePowerW`, da LG Chem oft schon vorher (eigene Reserve-Einstellung) aufhört zu laden/entladen |
 | `lgIdlePowerW` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadbandW` | 60 W | Totband gegen Flattern |
 | `minCommandIntervalMs` | 90 000 ms | Mindestabstand zwischen Cloud-Befehlen |
@@ -246,7 +246,7 @@ Nach dem Neustart erscheinen automatisch folgende neue Entities:
 |---|---|---|
 | `min_soc` / `max_soc` | 10 % / 95 % | Zellschutz-Grenzen des Anker |
 | `max_charge_power` / `max_discharge_power` | 1200 W / 1800 W | Leistungsgrenzen laut Datenblatt |
-| `lg_full_soc` / `lg_empty_soc` | 95 % / 10 % | Ab wann LG Chem als „voll“/„leer“ gilt |
+| `lg_full_soc` / `lg_empty_soc` | 95 % / 20 % | Großzügige SOC-Obergrenze für „voll“/„leer genug“ – die eigentliche Bestätigung liefert `lg_idle_power_w`, da LG Chem oft schon vorher (eigene Reserve-Einstellung) aufhört zu laden/entladen |
 | `lg_idle_power_w` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadband_w` | 60 W | Totband gegen Flattern |
 | *(fest im Automation-Code)* `min_interval_ok` | 90 s | Mindestabstand zwischen Cloud-Befehlen |
