@@ -67,8 +67,8 @@ template:
                                    #     entscheidend ist die Leistungspruefung unten, dieser Wert ist nur eine grosszuegige Obergrenze
       lg_idle_power_w: 50         # W - LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung unter diesem Wert liegt
       deadband_w: 60              # W - Totband gegen Flattern
-      max_charge_power: 1200      # W - siehe Datenblatt Anker MAX AC
-      max_discharge_power: 1800   # W - siehe Datenblatt Anker MAX AC
+      max_charge_power: 800       # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
+      max_discharge_power: 800    # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
 
       # ---------- Berechnung (nicht anpassen) ----------
       grid_power_raw: "{{ states(grid_power_entity) | float(0) }}"

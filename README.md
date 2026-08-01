@@ -143,7 +143,7 @@ Attribut `options:` der jeweiligen Entity.
 | Parameter | Standard | Bedeutung |
 |---|---|---|
 | `ankerMinSoc` / `ankerMaxSoc` | 10 % / 95 % | Zellschutz-Grenzen des Anker |
-| `ankerMaxChargePower` / `ankerMaxDischargePower` | 1200 W / 1800 W | Leistungsgrenzen laut Datenblatt |
+| `ankerMaxChargePower` / `ankerMaxDischargePower` | 800 W / 800 W | Entspricht dem `max`-Attribut des Netzleistung-Entities (Wert des Geräts prüfen, nicht raten!) |
 | `lgFullSoc` / `lgEmptySoc` | 95 % / 20 % | Großzügige SOC-Obergrenze für „voll“/„leer genug“ – die eigentliche Bestätigung liefert `lgIdlePowerW`, da LG Chem oft schon vorher (eigene Reserve-Einstellung) aufhört zu laden/entladen |
 | `lgIdlePowerW` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadbandW` | 60 W | Totband gegen Flattern |
@@ -245,7 +245,7 @@ Nach dem Neustart erscheinen automatisch folgende neue Entities:
 | Parameter | Standard | Bedeutung |
 |---|---|---|
 | `min_soc` / `max_soc` | 10 % / 95 % | Zellschutz-Grenzen des Anker |
-| `max_charge_power` / `max_discharge_power` | 1200 W / 1800 W | Leistungsgrenzen laut Datenblatt |
+| `max_charge_power` / `max_discharge_power` | 800 W / 800 W | Entspricht dem `max`-Attribut von `number.anker_solix_solarbank_max_ac_netzleistung` (Wert des Geräts prüfen, nicht raten!) |
 | `lg_full_soc` / `lg_empty_soc` | 95 % / 20 % | Großzügige SOC-Obergrenze für „voll“/„leer genug“ – die eigentliche Bestätigung liefert `lg_idle_power_w`, da LG Chem oft schon vorher (eigene Reserve-Einstellung) aufhört zu laden/entladen |
 | `lg_idle_power_w` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadband_w` | 60 W | Totband gegen Flattern |
