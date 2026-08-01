@@ -47,7 +47,7 @@ input_number:
 template:
   - trigger:
       - trigger: time_pattern
-        seconds: "/30"
+        seconds: "/15"
     variables:
       # ---------- Entity-IDs dieser Installation ----------
       grid_power_entity: sensor.solaredge_i1_m1_ac_power
@@ -69,6 +69,10 @@ template:
       deadband_w: 60              # W - Totband gegen Flattern
       max_charge_power: 800       # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
       max_discharge_power: 800    # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
+      coverage_ratio: 0.9         # Anker deckt nur 90% des gemessenen Defizits/Überschusses ab, statt 100% -
+                                   # Puffer gegen Überschwingen ins Gegenteil (Einspeisung/Bezug), wenn sich der
+                                   # tatsächliche Bedarf zwischen zwei Prüfungen ändert (Anker ist lokal/schnell,
+                                   # SolarEdge liest den Zähler aber nur alle paar Sekunden neu ein)
 
       # ---------- Berechnung (nicht anpassen) ----------
       grid_power_raw: "{{ states(grid_power_entity) | float(0) }}"
@@ -87,8 +91,8 @@ template:
       lg_saturated_full: "{{ lg_soc >= lg_full_soc and lg_power <= lg_idle_power_w }}"
       lg_saturated_empty: "{{ lg_soc <= lg_empty_soc and lg_power >= -lg_idle_power_w }}"
       action: "{{ 'unavailable' if not sensors_ok else ('charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else ('discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else 'idle')) }}"
-      charge_target: "{{ ([surplus, max_charge_power] | min) | round(0) if action == 'charge' else 0 }}"
-      discharge_target: "{{ ([deficit, max_discharge_power] | min) | round(0) if action == 'discharge' else 0 }}"
+      charge_target: "{{ (([surplus, max_charge_power] | min) * coverage_ratio) | round(0) if action == 'charge' else 0 }}"
+      discharge_target: "{{ (([deficit, max_discharge_power] | min) * coverage_ratio) | round(0) if action == 'discharge' else 0 }}"
     sensor:
       - name: "Anker Control Aktion"
         unique_id: anker_control_aktion
@@ -124,7 +128,7 @@ automation:
       zwischen Cloud-Befehlen und Sicherheits-Override bei SOC-Grenzen).
     trigger:
       - trigger: time_pattern
-        seconds: "/30"
+        seconds: "/15"
     condition: []
     mode: single
     action:
@@ -142,8 +146,8 @@ automation:
           seconds_since_last: "{{ now().timestamp() - (last_cmd_ts | as_timestamp(0)) }}"
           action_changed: "{{ action != prev_action }}"
           significant_change: "{{ (target_power - prev_power) | abs >= 50 }}"
-          due_for_refresh: "{{ seconds_since_last >= 600 }}"
-          min_interval_ok: "{{ seconds_since_last >= 90 }}"
+          due_for_refresh: "{{ seconds_since_last >= 120 }}"
+          min_interval_ok: "{{ seconds_since_last >= 15 }}"
           safety_override: "{{ (prev_action == 'discharge' and not can_discharge_now) or (prev_action == 'charge' and not can_charge_now) }}"
           should_send: "{{ action != 'unavailable' and (safety_override or ((action_changed or significant_change or due_for_refresh) and min_interval_ok)) }}"
       - if:

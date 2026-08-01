@@ -28,7 +28,7 @@ unten); es unterscheidet sich nur die technische Umsetzung.
 ```
 SolarEdge Zähler (Netzleistung) ──┐
 SolarEdge/LG Chem SOC ────────────┼──►   Entscheidungslogik   ──►  Anker MAX AC
-Anker SOC ─────────────────────── ┘   (alle 30 Sekunden geprüft)   (laden/entladen/Modus)
+Anker SOC ─────────────────────── ┘   (alle 15 Sekunden geprüft)   (laden/entladen/Modus)
 ```
 
 Die Logik **liest nur** die SolarEdge-/LG-Chem-Sensoren aus – sie greift nie in deren
@@ -58,14 +58,17 @@ Zusätzliche Schutzmechanismen:
   nie über 95 % geladen (Zellschonung), unabhängig von allen anderen Bedingungen.
 - **Totband** (`deadbandW`, Standard 60 W): Sehr kleine Überschüsse/Defizite lösen keine
   Aktion aus, damit die Steuerung nicht ständig hin- und herschaltet.
-- **Hysterese/Mindestabstand** (`minCommandIntervalMs`, Standard 90 s): Befehle an den Anker
-  werden nur bei relevanter Änderung und mit Mindestabstand gesendet, um die Cloud-API des
-  Anker-Geräts nicht zu überlasten (Anker wird nicht lokal, sondern über die Cloud
-  angesteuert).
+- **Deckungs-Marge** (`coverageRatio`, Standard 0,9): Der Anker deckt nur 90 % des gemessenen
+  Überschusses/Defizits ab, nicht 100 % – das lässt einen Puffer, damit eine kurzfristige
+  Laständerung zwischen zwei Prüfungen nicht sofort ins Gegenteil (Einspeisung/Bezug)
+  umschlägt (was sonst z. B. LG Chem fälschlich zum Nachladen verleiten könnte).
+- **Hysterese/Mindestabstand** (`minCommandIntervalMs`, Standard 15 s): Befehle an den Anker
+  werden nur bei relevanter Änderung und mit Mindestabstand gesendet (Anker wird lokal
+  angesteuert, daher reicht ein kurzer Abstand statt einer Cloud-Schonfrist).
 - **Sicherheits-Override:** Wird die SOC-Grenze erreicht, wird sofort (ohne auf den
   Mindestabstand zu warten) auf 0 W gesetzt.
-- **Auffrischung** (`forceResendMs`, Standard 10 min): Der aktuelle Befehl wird auch ohne
-  Änderung regelmäßig erneut gesendet, falls z. B. die Cloud-Verbindung des Anker-Geräts
+- **Auffrischung** (`forceResendMs`, Standard 2 min): Der aktuelle Befehl wird auch ohne
+  Änderung regelmäßig erneut gesendet, falls z. B. die Verbindung zum Anker-Gerät
   zwischenzeitlich unterbrochen war.
 - **Fail-Safe:** Sind Pflicht-Sensoren `unavailable`/`unknown` (z. B. Home Assistant startet
   gerade neu), wird **keine** Aktion ausgeführt und stattdessen eine Warnung/Benachrichtigung
@@ -103,8 +106,8 @@ Zusätzliche Schutzmechanismen:
    Bedarf `domain`/`service`) auf die tatsächlichen Entities deiner Anker-Integration setzen.
 5. Grenzwerte im Codeblock `LIMITS` an dein Anker-MAX-AC-Modell (Datenblatt: max.
    Lade-/Entladeleistung) sowie an deine Präferenzen anpassen.
-6. Deployen. Der Flow prüft danach automatisch alle 30 Sekunden den Zustand der Anlage
-   (Inject-Knoten „Alle 30s prüfen“); zum Testen steht zusätzlich „Manuell auslösen“ bereit.
+6. Deployen. Der Flow prüft danach automatisch alle 15 Sekunden den Zustand der Anlage
+   (Inject-Knoten „Alle 15s prüfen“); zum Testen steht zusätzlich „Manuell auslösen“ bereit.
 
 ## Steuerkonzept
 
@@ -147,9 +150,10 @@ Attribut `options:` der jeweiligen Entity.
 | `lgFullSoc` / `lgEmptySoc` | 95 % / 20 % | Großzügige SOC-Obergrenze für „voll“/„leer genug“ – die eigentliche Bestätigung liefert `lgIdlePowerW`, da LG Chem oft schon vorher (eigene Reserve-Einstellung) aufhört zu laden/entladen |
 | `lgIdlePowerW` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadbandW` | 60 W | Totband gegen Flattern |
-| `minCommandIntervalMs` | 90 000 ms | Mindestabstand zwischen Cloud-Befehlen |
+| `coverageRatio` | 0,9 | Anker deckt nur 90% des Überschusses/Defizits ab (Puffer gegen Überschwingen) |
+| `minCommandIntervalMs` | 15 000 ms | Mindestabstand zwischen zwei Befehlen (lokale Steuerung, kein Cloud-Limit) |
 | `minPowerDeltaToResend` | 50 W | Nötige Änderung, damit ein Befehl erneut gesendet wird |
-| `forceResendMs` | 600 000 ms | Intervall für automatische Auffrischung des Befehls |
+| `forceResendMs` | 120 000 ms | Intervall für automatische Auffrischung des Befehls |
 
 ## Fehlersuche (Node-RED)
 
@@ -249,13 +253,15 @@ Nach dem Neustart erscheinen automatisch folgende neue Entities:
 | `lg_full_soc` / `lg_empty_soc` | 95 % / 20 % | Großzügige SOC-Obergrenze für „voll“/„leer genug“ – die eigentliche Bestätigung liefert `lg_idle_power_w`, da LG Chem oft schon vorher (eigene Reserve-Einstellung) aufhört zu laden/entladen |
 | `lg_idle_power_w` | 50 W | LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung darunter liegt |
 | `deadband_w` | 60 W | Totband gegen Flattern |
-| *(fest im Automation-Code)* `min_interval_ok` | 90 s | Mindestabstand zwischen Cloud-Befehlen |
+| `coverage_ratio` | 0,9 | Anker deckt nur 90% des Überschusses/Defizits ab (Puffer gegen Überschwingen ins Gegenteil, wenn sich der Bedarf zwischen zwei 15s-Prüfungen ändert) |
+| *(fest im Automation-Code)* `min_interval_ok` | 15 s | Mindestabstand zwischen zwei Befehlen (lokale Steuerung, kein Cloud-Limit) |
 | *(fest im Automation-Code)* `significant_change` | 50 W | Nötige Änderung, damit ein Befehl erneut gesendet wird |
-| *(fest im Automation-Code)* `due_for_refresh` | 600 s | Intervall für automatische Auffrischung des Befehls |
+| *(fest im Automation-Code)* `due_for_refresh` | 120 s | Intervall für automatische Auffrischung des Befehls |
 
-Die drei fest im Automation-Code stehenden Schwellenwerte (90 s / 50 W / 600 s) lassen
+Die drei fest im Automation-Code stehenden Schwellenwerte (15 s / 50 W / 120 s) lassen
 sich bei Bedarf direkt in den `variables:` der Automation ändern (Suche nach `>= 50`,
-`>= 90`, `>= 600`).
+`>= 15`, `>= 120`). Trigger-Intervall (`seconds: "/15"`) für Template und Automation
+gleichermaßen anpassen, falls du es weiter beschleunigen oder verlangsamen willst.
 
 ## Fehlersuche (YAML-Variante)
 
