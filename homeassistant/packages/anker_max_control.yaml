@@ -45,23 +45,6 @@ input_number:
     unit_of_measurement: "W"
 
   # Winter-Optimierung: Konfigurierbare Parameter
-  winter_peak_hours_start:
-    name: "Winter: Spitzenlast-Stunden Start"
-    min: 0
-    max: 23
-    step: 1
-    unit_of_measurement: "h"
-    icon: "mdi:clock"
-    initial: 17
-
-  winter_peak_hours_end:
-    name: "Winter: Spitzenlast-Stunden Ende"
-    min: 0
-    max: 23
-    step: 1
-    unit_of_measurement: "h"
-    icon: "mdi:clock"
-    initial: 21
 
   winter_min_soc_reserve:
     name: "Winter: Minimale SOC-Reserve"
@@ -100,13 +83,10 @@ template:
       current_month: "{{ now().month }}"
       is_winter: "{{ current_month in (11, 12, 1, 2) }}"
 
-      # ---------- Tageszeit und Spitzenlast-Zeiten erkennen ----------
+      # ---------- Tageszeit und Tarif-Fenster erkennen ----------
       current_hour: "{{ now().hour }}"
-      winter_peak_start: "{{ states('input_number.winter_peak_hours_start') | int(17) }}"
-      winter_peak_end: "{{ states('input_number.winter_peak_hours_end') | int(21) }}"
-      is_peak_hours: "{{ current_hour >= winter_peak_start and current_hour < winter_peak_end }}"
-      is_daytime: "{{ current_hour >= 6 and current_hour < 17 }}"
-      is_offpeak_night: "{{ current_hour >= 0 and current_hour < 5 }}"  # Günstige Nachtstrom-Zeiten
+      is_cheap_night: "{{ current_hour >= 0 and current_hour < 5 }}"  # €0.16/kWh (günstig)
+      is_daytime: "{{ current_hour >= 5 and current_hour < 24 }}"     # €0.30/kWh (teurer)
 
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
@@ -144,20 +124,25 @@ template:
       lg_saturated_full: "{{ lg_soc >= lg_full_soc and lg_power <= lg_idle_power_w }}"
       lg_saturated_empty: "{{ lg_soc <= lg_empty_soc and lg_power >= -lg_idle_power_w }}"
 
-      # Winter-Modus: Aggressive Ladung bei tag und Entladung bei Spitzenlast
-      # Spitzenlast-Entladung: Während Peak-Stunden aggressiv entladen
-      winter_peak_discharge: "{{ is_winter and is_peak_hours and deficit > deadband_w and anker_soc > winter_min_soc_reserve }}"
-      # Spitzenlast-Ladung: Tagsüber aggressiv laden wenn LG > Schwelle
+      # Winter-Modus mit vereinfachtem Tarif (kein Peak, nur Tag/Nacht):
+      # 00:00-05:00: €0.16/kWh (günstig) → Laden
+      # 05:00-00:00: €0.30/kWh (teuer)  → Entladen
+
+      # Nacht-Ladung: Von Stromnetz laden, wenn Batterien leer und Strom günstig ist
+      winter_cheap_night_charge: "{{ is_winter and is_cheap_night and lg_soc < winter_lg_empty_threshold and anker_soc < 80 and can_charge }}"
+
+      # Tagsüber-Entladung: Batterien entladen um teure Stromkosten zu sparen
+      winter_daytime_discharge: "{{ is_winter and is_daytime and deficit > deadband_w and anker_soc > winter_min_soc_reserve }}"
+
+      # Tagsüber-Ladung: Aggressiv laden wenn LG > Schwelle und PV-Überschuss verfügbar
       winter_daytime_charge: "{{ is_winter and is_daytime and lg_soc >= winter_lg_full_threshold and surplus > deadband_w and can_charge }}"
-      # Off-Peak Nacht-Ladung: Nachts (0-5 Uhr) günstig von Stromnetz laden, wenn Batterien leer
-      winter_offpeak_charge: "{{ is_winter and is_offpeak_night and lg_soc < winter_lg_empty_threshold and anker_soc < 80 and can_charge }}"
 
       # Entscheidungslogik mit Winteroptimierung
       action: "{{
         'unavailable' if not sensors_ok else
-        'discharge' if winter_peak_discharge else
+        'charge' if winter_cheap_night_charge else
+        'discharge' if winter_daytime_discharge else
         'charge' if winter_daytime_charge else
-        'charge' if winter_offpeak_charge else
         'charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else
         'discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else
         'idle'
@@ -180,13 +165,13 @@ template:
           can_discharge: "{{ can_discharge }}"
           # Winter-Modus Informationen
           is_winter: "{{ is_winter }}"
-          is_peak_hours: "{{ is_peak_hours }}"
-          is_offpeak_night: "{{ is_offpeak_night }}"
-          winter_peak_discharge: "{{ winter_peak_discharge }}"
+          is_cheap_night: "{{ is_cheap_night }}"
+          winter_cheap_night_charge: "{{ winter_cheap_night_charge }}"
+          winter_daytime_discharge: "{{ winter_daytime_discharge }}"
           winter_daytime_charge: "{{ winter_daytime_charge }}"
-          winter_offpeak_charge: "{{ winter_offpeak_charge }}"
           current_season: "{{ 'Winter' if is_winter else 'Sommer' }}"
-          current_period: "{{ 'Günstige Nachtstrom (0-5 Uhr)' if is_offpeak_night else ('Spitzenlast-Stunden' if is_peak_hours else ('Tageslicht' if is_daytime else 'Nacht')) }}"
+          current_period: "{{ 'Günstige Nacht €0.16 (00-05 Uhr)' if is_cheap_night else 'Teurer Tag €0.30 (05-00 Uhr)' }}"
+          current_tariff: "{{ '€0.16/kWh' if is_cheap_night else '€0.30/kWh' }}"
       - name: "Anker Control Ladeleistung Soll"
         unique_id: anker_control_ladeleistung_soll
         unit_of_measurement: "W"
