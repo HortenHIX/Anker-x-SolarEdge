@@ -7,62 +7,42 @@ The enhanced control logic adapts your battery management strategy between summe
 ## Winter Operation Strategy
 
 ### The Problem
-- **Winter PV generation** is 60-80% lower than summer
+- **Winter PV generation** is 60-80% lower than summer (your December: only 120 kWh)
 - **Nighttime grid electricity must be purchased** since daytime PV cannot cover night consumption
-- **Peak tariffs** are typically highest in evening hours (17:00-21:00)
-- **Goal**: Minimize grid import costs by shifting consumption to off-peak hours and maximizing battery discharge during peak tariffs
+- **Two-tier tariff**: Cheap night (€0.16/kWh) vs expensive day (€0.30/kWh)
+- **Goal**: Exploit tariff arbitrage by charging at night and discharging during the day to minimize overall grid costs
 
 ### The Solution: Time-Based Discharge Management
 
 ```
-WINTER SEASON (Nov-Feb):
-┌─────────────────────────────────────────────────────────┐
-│ 00:00-05:00 (CHEAP NIGHT ELECTRICITY)                   │
-│ ✓ Charge both batteries from grid at cheapest rate      │
-│ ✓ If LG SOC < 35% and Anker < 80%                       │
-│ ✓ Pre-load batteries before expensive daytime           │
-│ ✓ Typical tariff: €0.20-0.25/kWh (lowest of day)       │
-└─────────────────────────────────────────────────────────┘
+WINTER SEASON (Nov-Feb) - YOUR TARIFF STRUCTURE:
+┌──────────────────────────────────────────────────────────┐
+│ 00:00-05:00 (CHEAP NIGHT CHARGING)                       │
+│ ✓ Charge both batteries from grid at €0.16/kWh          │
+│ ✓ Only when batteries depleted (LG < 35%, Anker < 80%)   │
+│ ✓ Cost: €1.60 to charge 6.4 kWh Anker                   │
+│ ✓ Pre-load batteries for daytime use                     │
+└──────────────────────────────────────────────────────────┘
         ↓ 05:00
-┌─────────────────────────────────────────────────────────┐
-│ 06:00-17:00 (DAYTIME)                                   │
-│ ✓ Charge aggressively when LG > 80% (lower threshold)   │
-│ ✓ Fill both batteries with any available PV surplus      │
-│ ✓ Prepare for evening peak tariff                        │
-│ ✓ Switch to PV charging as soon as sun rises            │
-└─────────────────────────────────────────────────────────┘
-        ↓ 17:00
-┌─────────────────────────────────────────────────────────┐
-│ 17:00-21:00 (PEAK TARIFF HOURS)                         │
-│ ✓ Discharge both batteries to offset peak consumption    │
-│ ✓ Minimize grid import (most expensive: €0.45-0.50)     │
+┌──────────────────────────────────────────────────────────┐
+│ 05:00-00:00 (EXPENSIVE DAY - DISCHARGE & PV CHARGING)   │
+│ ✓ Discharge batteries to avoid €0.30/kWh grid import    │
+│ ✓ Charge from available PV when LG > 80%                │
+│ ✓ Reduce daytime consumption from expensive grid        │
 │ ✓ Maintain minimum 20% SOC reserve                       │
-│ ✓ Typical tariff: €0.45-0.50/kWh (highest of day)      │
-└─────────────────────────────────────────────────────────┘
-        ↓ 21:00
-┌─────────────────────────────────────────────────────────┐
-│ 21:00-00:00 (NORMAL/OFF-PEAK HOURS)                     │
-│ ✓ Discharge slowly to cover evening loads               │
-│ ✓ Or continue if still in peak tariff period            │
-│ ✓ Idle if batteries sufficient for night                │
-└─────────────────────────────────────────────────────────┘
+│ ✓ Tariff: €0.30/kWh (1.88x more expensive than night)  │
+└──────────────────────────────────────────────────────────┘
+        ↓ 00:00 (cycle repeats)
 ```
+
+**Tariff Comparison**:
+- Night (€0.16) = baseline 100%
+- Day (€0.30) = 188% of night cost
+- Daily rate difference: 2x spread is good for arbitrage
 
 ## Configuration Parameters
 
-### 1. Time Windows (adjustable in Home Assistant UI)
-
-**Winter Peak Hours Start** (input_number.anker_winter_peak_hour_start)
-- Default: 17 (5 PM)
-- Set to your local peak tariff start hour
-- Example: If peak starts at 4 PM, set to 16
-
-**Winter Peak Hours End** (input_number.anker_winter_peak_hour_end)
-- Default: 21 (9 PM)
-- Set to your local peak tariff end hour
-- Example: If peak ends at 8 PM, set to 20
-
-### 2. Battery Reserve Settings
+### 1. Battery Reserve Settings (adjustable in Home Assistant UI)
 
 **Winter Minimum SOC Reserve** (input_number.anker_winter_min_soc_reserve)
 - Default: 20%
