@@ -17,24 +17,34 @@ The enhanced control logic adapts your battery management strategy between summe
 ```
 WINTER SEASON (Nov-Feb):
 ┌─────────────────────────────────────────────────────────┐
+│ 00:00-05:00 (CHEAP NIGHT ELECTRICITY)                   │
+│ ✓ Charge both batteries from grid at cheapest rate      │
+│ ✓ If LG SOC < 35% and Anker < 80%                       │
+│ ✓ Pre-load batteries before expensive daytime           │
+│ ✓ Typical tariff: €0.20-0.25/kWh (lowest of day)       │
+└─────────────────────────────────────────────────────────┘
+        ↓ 05:00
+┌─────────────────────────────────────────────────────────┐
 │ 06:00-17:00 (DAYTIME)                                   │
 │ ✓ Charge aggressively when LG > 80% (lower threshold)   │
 │ ✓ Fill both batteries with any available PV surplus      │
-│ ✓ Prepare for night consumption                          │
+│ ✓ Prepare for evening peak tariff                        │
+│ ✓ Switch to PV charging as soon as sun rises            │
 └─────────────────────────────────────────────────────────┘
         ↓ 17:00
 ┌─────────────────────────────────────────────────────────┐
 │ 17:00-21:00 (PEAK TARIFF HOURS)                         │
 │ ✓ Discharge both batteries to offset peak consumption    │
-│ ✓ Minimize grid import (most expensive)                  │
+│ ✓ Minimize grid import (most expensive: €0.45-0.50)     │
 │ ✓ Maintain minimum 20% SOC reserve                       │
+│ ✓ Typical tariff: €0.45-0.50/kWh (highest of day)      │
 └─────────────────────────────────────────────────────────┘
         ↓ 21:00
 ┌─────────────────────────────────────────────────────────┐
-│ 21:00-06:00 (OFF-PEAK HOURS)                            │
-│ Option A: Charge from cheap grid power if batteries low  │
-│ Option B: Discharge slowly to cover night loads          │
-│ Option C: Idle if batteries sufficient                   │
+│ 21:00-00:00 (NORMAL/OFF-PEAK HOURS)                     │
+│ ✓ Discharge slowly to cover evening loads               │
+│ ✓ Or continue if still in peak tariff period            │
+│ ✓ Idle if batteries sufficient for night                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -81,9 +91,29 @@ max_discharge_power: 800W      # Anker discharge limit
 min_soc_reserve: 20            # Absolute minimum reserve (overridden by input number)
 ```
 
-## Operating Modes
+## Operating Modes (Priority Order)
 
-### Mode 1: Winter Daytime (06:00-17:00)
+### Mode 1: Winter Off-Peak Night Charging (00:00-05:00 - Highest Priority)
+**Objective**: Charge from cheapest night-rate electricity
+
+**Trigger Conditions**:
+- Current season is winter
+- Current time is cheap night (00:00-05:00)
+- LG SOC < 35%
+- Anker SOC < 80%
+
+**Action**: Charge Anker and LG from grid at night-rate tariff
+
+**Benefit**: Arbitrage between cheap night (€0.20-0.25/kWh) and expensive peak (€0.45-0.50/kWh)
+
+**Example**: 
+- Cost to charge 6.4 kWh @ €0.25 = €1.60
+- Value when discharged during peak @ €0.50 = €3.20
+- Net savings: €1.60 per night = €48/month
+
+---
+
+### Mode 2: Winter Daytime (06:00-17:00)
 **Objective**: Maximize battery charging
 
 **Trigger Conditions**:
@@ -130,20 +160,53 @@ WITH OPTIMIZATION:
 
 ---
 
-### Mode 3: Winter Off-Peak (21:00-06:00)
-**Objective**: Minimize off-peak grid import or charge from cheap grid power
+### Mode 3: Winter Off-Peak Night Charging (00:00-05:00)
+**Objective**: Charge from cheap night-rate electricity for daytime use
 
 **Trigger Conditions**:
 - Current season is winter
-- Current time is off-peak (21:00-06:00 or after peak ends)
-- LG SOC < 35% (winter empty threshold)
+- Current time is cheap night hours (00:00-05:00)
+- LG SOC < 35% (depleted from evening peak discharge)
 - Anker SOC < 80%
+- Grid import available
 
-**Action**: Charge from grid during cheapest hours to pre-position for next day
+**Action**: Charge both batteries from grid at cheap night rates
 
-**OR alternatively**: Discharge slowly to cover night loads within battery limits
+**Financial Arbitrage**:
+```
+Buy: 1 kWh @ €0.25 (night rate, 00:00-05:00)
+Store: Both batteries (~50% efficiency round-trip loss)
+Discharge: 0.9 kWh @ €0.50 (peak hours, 17:00-21:00)
+Net Profit: €0.50 × 0.9 - €0.25 = €0.20 per kWh stored
 
-**Benefit**: Reduces morning demand if charging overnight; or reduces any remaining grid import if discharging
+Example: 
+- Charge 6.4 kWh Anker overnight @ €0.25 = €1.60
+- Discharge during peak @ €0.50, value = €3.20
+- Less efficiency loss and cost = €1.60 savings/cycle
+- Nightly savings: €1.60 × 30 nights = €48/month
+```
+
+**Benefit**: Exploits tariff arbitrage between cheapest (night) and most expensive (peak) hours
+
+**Efficiency Note**: This strategy only makes financial sense if:
+- Night rate < 50% of peak rate (break-even point after battery losses)
+- Example ✓: Night €0.25 vs Peak €0.50 (2x difference = worthwhile)
+- Example ✗: Night €0.35 vs Peak €0.40 (1.14x difference = loss exceeds benefit)
+
+---
+
+### Mode 4: Winter Off-Peak Discharge (21:00-00:00)
+**Objective**: Use stored battery energy for remaining evening loads
+
+**Trigger Conditions**:
+- Current season is winter
+- Current time is off-peak but not cheap night (21:00-00:00)
+- Grid import deficit > 0
+- Anker SOC > minimum reserve
+
+**Action**: Discharge batteries to cover household loads without charging overnight
+
+**Benefit**: Reduces or eliminates need for overnight charging if peak discharge was sufficient
 
 ---
 

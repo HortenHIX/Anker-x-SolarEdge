@@ -106,6 +106,7 @@ template:
       winter_peak_end: "{{ states('input_number.winter_peak_hours_end') | int(21) }}"
       is_peak_hours: "{{ current_hour >= winter_peak_start and current_hour < winter_peak_end }}"
       is_daytime: "{{ current_hour >= 6 and current_hour < 17 }}"
+      is_offpeak_night: "{{ current_hour >= 0 and current_hour < 5 }}"  # Günstige Nachtstrom-Zeiten
 
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
@@ -148,12 +149,15 @@ template:
       winter_peak_discharge: "{{ is_winter and is_peak_hours and deficit > deadband_w and anker_soc > winter_min_soc_reserve }}"
       # Spitzenlast-Ladung: Tagsüber aggressiv laden wenn LG > Schwelle
       winter_daytime_charge: "{{ is_winter and is_daytime and lg_soc >= winter_lg_full_threshold and surplus > deadband_w and can_charge }}"
+      # Off-Peak Nacht-Ladung: Nachts (0-5 Uhr) günstig von Stromnetz laden, wenn Batterien leer
+      winter_offpeak_charge: "{{ is_winter and is_offpeak_night and lg_soc < winter_lg_empty_threshold and anker_soc < 80 and can_charge }}"
 
       # Entscheidungslogik mit Winteroptimierung
       action: "{{
         'unavailable' if not sensors_ok else
         'discharge' if winter_peak_discharge else
         'charge' if winter_daytime_charge else
+        'charge' if winter_offpeak_charge else
         'charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else
         'discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else
         'idle'
@@ -177,10 +181,12 @@ template:
           # Winter-Modus Informationen
           is_winter: "{{ is_winter }}"
           is_peak_hours: "{{ is_peak_hours }}"
+          is_offpeak_night: "{{ is_offpeak_night }}"
           winter_peak_discharge: "{{ winter_peak_discharge }}"
           winter_daytime_charge: "{{ winter_daytime_charge }}"
+          winter_offpeak_charge: "{{ winter_offpeak_charge }}"
           current_season: "{{ 'Winter' if is_winter else 'Sommer' }}"
-          current_period: "{{ 'Spitzenlast-Stunden' if is_peak_hours else ('Tageslicht' if is_daytime else 'Nacht') }}"
+          current_period: "{{ 'Günstige Nachtstrom (0-5 Uhr)' if is_offpeak_night else ('Spitzenlast-Stunden' if is_peak_hours else ('Tageslicht' if is_daytime else 'Nacht')) }}"
       - name: "Anker Control Ladeleistung Soll"
         unique_id: anker_control_ladeleistung_soll
         unit_of_measurement: "W"
