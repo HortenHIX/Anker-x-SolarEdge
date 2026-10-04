@@ -44,6 +44,43 @@ input_number:
     step: 1
     unit_of_measurement: "W"
 
+  # Winter-Optimierung: Konfigurierbare Parameter
+  winter_peak_hours_start:
+    name: "Winter: Spitzenlast-Stunden Start"
+    min: 0
+    max: 23
+    step: 1
+    unit_of_measurement: "h"
+    icon: "mdi:clock"
+    initial: 17
+
+  winter_peak_hours_end:
+    name: "Winter: Spitzenlast-Stunden Ende"
+    min: 0
+    max: 23
+    step: 1
+    unit_of_measurement: "h"
+    icon: "mdi:clock"
+    initial: 21
+
+  winter_min_soc_reserve:
+    name: "Winter: Minimale SOC-Reserve"
+    min: 10
+    max: 50
+    step: 5
+    unit_of_measurement: "%"
+    icon: "mdi:battery-low"
+    initial: 20
+
+  winter_lg_full_threshold:
+    name: "Winter: LG-Ladegrenze für Anker"
+    min: 60
+    max: 95
+    step: 5
+    unit_of_measurement: "%"
+    icon: "mdi:battery"
+    initial: 80
+
 template:
   - trigger:
       - trigger: time_pattern
@@ -59,20 +96,34 @@ template:
       # Einspeisung) - per Praxistest am 30.07.2026 bestätigt, daher -1.
       grid_power_sign: -1
 
+      # ---------- Jahreszeit erkennen (Winter = Nov-Feb) ----------
+      current_month: "{{ now().month }}"
+      is_winter: "{{ current_month in (11, 12, 1, 2) }}"
+
+      # ---------- Tageszeit und Spitzenlast-Zeiten erkennen ----------
+      current_hour: "{{ now().hour }}"
+      winter_peak_start: "{{ states('input_number.winter_peak_hours_start') | int(17) }}"
+      winter_peak_end: "{{ states('input_number.winter_peak_hours_end') | int(21) }}"
+      is_peak_hours: "{{ current_hour >= winter_peak_start and current_hour < winter_peak_end }}"
+      is_daytime: "{{ current_hour >= 6 and current_hour < 17 }}"
+
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
       max_soc: 95                 # % - nie über diesen Wert laden (Zellschutz)
-      lg_full_soc: 95             # % - grober Richtwert "voll genug"; die tatsaechliche Bestaetigung liefert lg_idle_power_w
-      lg_empty_soc: 20            # % - grober Richtwert "leer genug"; LG Chem stoppt evtl. schon vorher (eigene Notstromreserve),
-                                   #     entscheidend ist die Leistungspruefung unten, dieser Wert ist nur eine grosszuegige Obergrenze
+      lg_full_soc: 95             # % - Sommermodus: grober Richtwert "voll genug"
+      lg_empty_soc: 20            # % - Sommermodus: grober Richtwert "leer genug"
+      # Winter-spezifische Schwellen (aggressivere Nutzung bei niedriger PV-Ausbeute)
+      winter_lg_full_threshold: "{{ states('input_number.winter_lg_full_threshold') | int(80) }}"
+      winter_lg_empty_threshold: 35  # % - Wintermodus: Entladegrenze für Entladevorgänge
+      winter_min_soc_reserve: "{{ states('input_number.winter_min_soc_reserve') | int(20) }}"
+
       lg_idle_power_w: 50         # W - LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung unter diesem Wert liegt
       deadband_w: 60              # W - Totband gegen Flattern
       max_charge_power: 800       # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
       max_discharge_power: 800    # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
       coverage_ratio: 0.9         # Anker deckt nur 90% des gemessenen Defizits/Überschusses ab, statt 100% -
                                    # Puffer gegen Überschwingen ins Gegenteil (Einspeisung/Bezug), wenn sich der
-                                   # tatsächliche Bedarf zwischen zwei Prüfungen ändert (Anker ist lokal/schnell,
-                                   # SolarEdge liest den Zähler aber nur alle paar Sekunden neu ein)
+                                   # tatsächliche Bedarf zwischen zwei Prüfungen ändert
 
       # ---------- Berechnung (nicht anpassen) ----------
       grid_power_raw: "{{ states(grid_power_entity) | float(0) }}"
@@ -88,9 +139,25 @@ template:
       # LG Chem gilt nur dann als "gesättigt" (voll/leer), wenn zusätzlich zum SOC-Schwellenwert
       # auch die tatsächliche Lade-/Entladeleistung nahe Null ist - sonst lädt/entlädt SolarEdge
       # den Speicher noch aktiv, und der Anker würde unnötig mit ihm konkurrieren.
+      # Sommer-Modus: Nach Original-Schwellen (95% voll, 20% leer)
       lg_saturated_full: "{{ lg_soc >= lg_full_soc and lg_power <= lg_idle_power_w }}"
       lg_saturated_empty: "{{ lg_soc <= lg_empty_soc and lg_power >= -lg_idle_power_w }}"
-      action: "{{ 'unavailable' if not sensors_ok else ('charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else ('discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else 'idle')) }}"
+
+      # Winter-Modus: Aggressive Ladung bei tag und Entladung bei Spitzenlast
+      # Spitzenlast-Entladung: Während Peak-Stunden aggressiv entladen
+      winter_peak_discharge: "{{ is_winter and is_peak_hours and deficit > deadband_w and anker_soc > winter_min_soc_reserve }}"
+      # Spitzenlast-Ladung: Tagsüber aggressiv laden wenn LG > Schwelle
+      winter_daytime_charge: "{{ is_winter and is_daytime and lg_soc >= winter_lg_full_threshold and surplus > deadband_w and can_charge }}"
+
+      # Entscheidungslogik mit Winteroptimierung
+      action: "{{
+        'unavailable' if not sensors_ok else
+        'discharge' if winter_peak_discharge else
+        'charge' if winter_daytime_charge else
+        'charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else
+        'discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else
+        'idle'
+      }}"
       charge_target: "{{ (([surplus, max_charge_power] | min) * coverage_ratio) | round(0) if action == 'charge' else 0 }}"
       discharge_target: "{{ (([deficit, max_discharge_power] | min) * coverage_ratio) | round(0) if action == 'discharge' else 0 }}"
     sensor:
@@ -107,6 +174,13 @@ template:
           anker_soc: "{{ anker_soc }}"
           can_charge: "{{ can_charge }}"
           can_discharge: "{{ can_discharge }}"
+          # Winter-Modus Informationen
+          is_winter: "{{ is_winter }}"
+          is_peak_hours: "{{ is_peak_hours }}"
+          winter_peak_discharge: "{{ winter_peak_discharge }}"
+          winter_daytime_charge: "{{ winter_daytime_charge }}"
+          current_season: "{{ 'Winter' if is_winter else 'Sommer' }}"
+          current_period: "{{ 'Spitzenlast-Stunden' if is_peak_hours else ('Tageslicht' if is_daytime else 'Nacht') }}"
       - name: "Anker Control Ladeleistung Soll"
         unique_id: anker_control_ladeleistung_soll
         unit_of_measurement: "W"
