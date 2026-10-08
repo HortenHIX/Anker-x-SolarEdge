@@ -128,10 +128,11 @@ template:
       # 00:00-05:00: €0.16/kWh (günstig) → Laden
       # 05:00-00:00: €0.30/kWh (teuer)  → Entladen
 
-      # Nacht-Ladung: Von Stromnetz laden, wenn Batterien leer und Strom günstig ist
-      winter_cheap_night_charge: "{{ is_winter and is_cheap_night and lg_soc < winter_lg_empty_threshold and anker_soc < 80 and can_charge }}"
+      # Nacht-Ladung: Anker laden wenn Stromnetz günstig ist (0-5 Uhr)
+      # SolarEdge lädt auch LG, beide Batterien werden aufgeladen für den Tag
+      winter_cheap_night_charge: "{{ is_winter and is_cheap_night and anker_soc < 90 and can_charge }}"
 
-      # Tagsüber-Entladung: Batterien entladen um teure Stromkosten zu sparen
+      # Tagsüber-Entladung: Anker entladen um teure Stromkosten zu sparen
       winter_daytime_discharge: "{{ is_winter and is_daytime and deficit > deadband_w and anker_soc > winter_min_soc_reserve }}"
 
       # Tagsüber-Ladung: Aggressiv laden wenn LG > Schwelle und PV-Überschuss verfügbar
@@ -170,7 +171,7 @@ template:
           winter_daytime_discharge: "{{ winter_daytime_discharge }}"
           winter_daytime_charge: "{{ winter_daytime_charge }}"
           current_season: "{{ 'Winter' if is_winter else 'Sommer' }}"
-          current_period: "{{ 'Günstige Nacht €0.16 (00-05 Uhr)' if is_cheap_night else 'Teurer Tag €0.30 (05-00 Uhr)' }}"
+          current_period: "{{ 'Günstige Nacht €0.16 (00-05 Uhr) - Beide Batterien laden' if is_cheap_night else 'Teurer Tag €0.30 (05-00 Uhr) - Beide Batterien entladen' }}"
           current_tariff: "{{ '€0.16/kWh' if is_cheap_night else '€0.30/kWh' }}"
       - name: "Anker Control Ladeleistung Soll"
         unique_id: anker_control_ladeleistung_soll
