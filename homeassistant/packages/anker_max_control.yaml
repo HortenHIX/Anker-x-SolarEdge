@@ -79,9 +79,9 @@ template:
       # Einspeisung) - per Praxistest am 30.07.2026 bestätigt, daher -1.
       grid_power_sign: -1
 
-      # ---------- Jahreszeit erkennen (Winter = Nov-Feb) ----------
+      # ---------- Jahreszeit erkennen (Winter = Okt-Mär) ----------
       current_month: "{{ now().month }}"
-      is_winter: "{{ current_month in (11, 12, 1, 2) }}"
+      is_winter: "{{ current_month in (10, 11, 12, 1, 2, 3) }}"
 
       # ---------- Tageszeit und Tarif-Fenster erkennen ----------
       current_hour: "{{ now().hour }}"
@@ -100,6 +100,7 @@ template:
       lg_idle_power_w: 50         # W - LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung unter diesem Wert liegt
       deadband_w: 60              # W - Totband gegen Flattern
       max_charge_power: 800       # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
+      night_charge_power: 800     # W - Nachtladung; nur erhöhen, wenn der Anker-Entity-Wert (max-Attribut von ...netzleistung) mehr erlaubt
       max_discharge_power: 800    # W - entspricht dem max-Attribut von number.anker_solix_solarbank_max_ac_netzleistung
       coverage_ratio: 0.9         # Anker deckt nur 90% des gemessenen Defizits/Überschusses ab, statt 100% -
                                    # Puffer gegen Überschwingen ins Gegenteil (Einspeisung/Bezug), wenn sich der
@@ -149,7 +150,7 @@ template:
         'discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else
         'idle'
       }}"
-      charge_target: "{{ 0 if action != 'charge' else (max_charge_power if winter_cheap_night_charge else (([[surplus, 0] | max, max_charge_power] | min) * coverage_ratio) | round(0)) }}"
+      charge_target: "{{ 0 if action != 'charge' else (night_charge_power if winter_cheap_night_charge else (([[surplus, 0] | max, max_charge_power] | min) * coverage_ratio) | round(0)) }}"
       discharge_target: "{{ (([[deficit, 0] | max, max_discharge_power] | min) * coverage_ratio) | round(0) if action == 'discharge' else 0 }}"
     sensor:
       - name: "Anker Control Aktion"
