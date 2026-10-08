@@ -86,7 +86,7 @@ template:
       # ---------- Tageszeit und Tarif-Fenster erkennen ----------
       current_hour: "{{ now().hour }}"
       is_cheap_night: "{{ current_hour >= 0 and current_hour < 5 }}"  # €0.16/kWh (günstig)
-      is_daytime: "{{ current_hour >= 5 and current_hour < 24 }}"     # €0.30/kWh (teurer)
+      is_daytime: "{{ not is_cheap_night }}"                          # 05-24 Uhr, €0.30/kWh (teurer)
 
       # ---------- Grenzwerte / Verhalten (bei Bedarf anpassen) ----------
       min_soc: 10                 # % - nie unter diesen Wert entladen (Zellschutz)
@@ -95,7 +95,6 @@ template:
       lg_empty_soc: 20            # % - Sommermodus: grober Richtwert "leer genug"
       # Winter-spezifische Schwellen (aggressivere Nutzung bei niedriger PV-Ausbeute)
       winter_lg_full_threshold: "{{ states('input_number.winter_lg_full_threshold') | int(80) }}"
-      winter_lg_empty_threshold: 35  # % - Wintermodus: Entladegrenze für Entladevorgänge
       winter_min_soc_reserve: "{{ states('input_number.winter_min_soc_reserve') | int(20) }}"
 
       lg_idle_power_w: 50         # W - LG Chem gilt erst als gesättigt, wenn Lade-/Entladeleistung unter diesem Wert liegt
@@ -125,12 +124,13 @@ template:
       lg_saturated_empty: "{{ lg_soc <= lg_empty_soc and lg_power >= -lg_idle_power_w }}"
 
       # Winter-Modus mit vereinfachtem Tarif (kein Peak, nur Tag/Nacht):
-      # 00:00-05:00: €0.16/kWh (günstig) → Laden
+      # 00:00-05:00: €0.16/kWh (günstig) → Laden (feste Leistung, unabhängig vom Netzbezug)
       # 05:00-00:00: €0.30/kWh (teuer)  → Entladen
 
       # Nacht-Ladung: Anker laden wenn Stromnetz günstig ist (0-5 Uhr)
-      # SolarEdge lädt auch LG, beide Batterien werden aufgeladen für den Tag
-      winter_cheap_night_charge: "{{ is_winter and is_cheap_night and anker_soc < 90 and can_charge }}"
+      # SolarEdge lädt den LG parallel per eigenem Zeitplan.
+      winter_night_window: "{{ is_winter and is_cheap_night }}"
+      winter_cheap_night_charge: "{{ winter_night_window and anker_soc < 90 and can_charge }}"
 
       # Tagsüber-Entladung: Anker entladen um teure Stromkosten zu sparen
       winter_daytime_discharge: "{{ is_winter and is_daytime and deficit > deadband_w and anker_soc > winter_min_soc_reserve }}"
@@ -142,14 +142,15 @@ template:
       action: "{{
         'unavailable' if not sensors_ok else
         'charge' if winter_cheap_night_charge else
+        'idle' if winter_night_window else
         'discharge' if winter_daytime_discharge else
         'charge' if winter_daytime_charge else
         'charge' if (surplus > deadband_w and lg_saturated_full and can_charge) else
         'discharge' if (deficit > deadband_w and lg_saturated_empty and can_discharge) else
         'idle'
       }}"
-      charge_target: "{{ (([surplus, max_charge_power] | min) * coverage_ratio) | round(0) if action == 'charge' else 0 }}"
-      discharge_target: "{{ (([deficit, max_discharge_power] | min) * coverage_ratio) | round(0) if action == 'discharge' else 0 }}"
+      charge_target: "{{ 0 if action != 'charge' else (max_charge_power if winter_cheap_night_charge else (([[surplus, 0] | max, max_charge_power] | min) * coverage_ratio) | round(0)) }}"
+      discharge_target: "{{ (([[deficit, 0] | max, max_discharge_power] | min) * coverage_ratio) | round(0) if action == 'discharge' else 0 }}"
     sensor:
       - name: "Anker Control Aktion"
         unique_id: anker_control_aktion
